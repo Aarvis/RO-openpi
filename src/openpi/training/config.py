@@ -19,6 +19,7 @@ import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.lehome_policy as lehome_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -347,6 +348,64 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
         model_transforms = ModelTransformFactory()(model_config)
 
         # We return all data transforms for training and inference. No need to change anything here.
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotLehomeDataConfig(DataConfigFactory):
+    """
+    Data config for LeHome datasets stored in LeRobot format.
+
+    Expected dataset feature keys:
+      - observation.images.top_rgb
+      - observation.images.left_rgb
+      - observation.images.right_rgb
+      - observation.state
+      - actions
+      - task (used as prompt if prompt_from_task=True)
+    """
+
+    use_delta_joint_actions: bool = False
+    action_dim: int = 12
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/top_rgb": "observation.images.top_rgb",
+                        "observation/left_rgb": "observation.images.left_rgb",
+                        "observation/right_rgb": "observation.images.right_rgb",
+                        "observation/state": "observation.state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[lehome_policy.LehomeInputs(model_type=model_config.model_type)],
+            outputs=[lehome_policy.LehomeOutputs(action_dim=self.action_dim)],
+        )
+
+        if self.use_delta_joint_actions:
+            # For dual-arm SO101: (5 arm joints + 1 gripper) x 2
+            # Keep grippers absolute and convert arm joints to delta.
+            delta_action_mask = _transforms.make_bool_mask(5, -1, 5, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=repack_transform,
@@ -760,6 +819,25 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
+    ),
+    #
+    # Fine-tuning LeHome configs.
+    #
+    TrainConfig(
+        # Example config for fine-tuning on a LeHome LeRobot dataset converted from episode JSON.
+        name="pi05_lehome_robot_finetune",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        data=LeRobotLehomeDataConfig(
+            # Replace with your local/HF LeRobot repo id.
+            repo_id="your_hf_username/lehome_robot",
+            base_config=DataConfig(prompt_from_task=True),
+            # LeHome actions are typically joint-space absolute targets.
+            use_delta_joint_actions=False,
+            action_dim=12,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=30_000,
+        batch_size=64,
     ),
     #
     # Fine-tuning Aloha configs.
