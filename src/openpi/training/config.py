@@ -829,14 +829,14 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         data=LeRobotLehomeDataConfig(
             # Replace with your local/HF LeRobot repo id.
-            repo_id="your_hf_username/lehome_robot",
+            repo_id="huggingaccounttest/lehome-openpi-episode",
             base_config=DataConfig(prompt_from_task=True),
             # LeHome actions are typically joint-space absolute targets.
             use_delta_joint_actions=False,
             action_dim=12,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=30_000,
+        num_train_steps=600,
         batch_size=64,
     ),
     #
