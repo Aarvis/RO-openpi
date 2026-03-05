@@ -827,17 +827,21 @@ _CONFIGS = [
         # Example config for fine-tuning on a LeHome LeRobot dataset converted from episode JSON.
         name="pi05_lehome_robot_finetune",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        num_workers=32,
         data=LeRobotLehomeDataConfig(
             # Replace with your local/HF LeRobot repo id.
-            repo_id="huggingaccounttest/lehome-openpi-episode",
+            # repo_id="huggingaccounttest/lehome-openpi-episode",
+            repo_id="local/lehome_all_episodes",
             base_config=DataConfig(prompt_from_task=True),
             # LeHome actions are typically joint-space absolute targets.
             use_delta_joint_actions=False,
             action_dim=12,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=600,
+        num_train_steps=30_000,
         batch_size=64,
+        log_interval = 50,
+        save_interval = 20_000,
     ),
     #
     # Fine-tuning Aloha configs.

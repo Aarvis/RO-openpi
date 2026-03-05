@@ -32,6 +32,16 @@ uv run examples/lehome/convert_episode_json_to_lerobot.py \
   --source-root ../lehome-challenge
 ```
 
+```bash
+uv run examples/lehome/convert_episode_json_to_lerobot.py \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports \
+  --json-glob "**/json/episode_*.json" \
+  --repo-name local/lehome_all_episodes \
+  --source-root .. \
+  --overwrite
+```
+
+
 Set cache properly
 mkdir -p /datadrive/cache/openpi /datadrive/cache/hf /datadrive/hf_cache/lerobot
 export OPENPI_DATA_HOME=/datadrive/cache/openpi
@@ -39,6 +49,10 @@ export HF_HOME=/datadrive/cache/hf
 export HUGGINGFACE_HUB_CACHE=/datadrive/cache/hf/hub
 export HF_LEROBOT_HOME=/datadrive/hf_cache/lerobot
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p /datadrive/cache/hf/datasets /datadrive/tmp
+export HF_DATASETS_CACHE=/datadrive/cache/hf/datasets
+export TMPDIR=/datadrive/tmp
 
 Then:
 ```bash
@@ -78,10 +92,12 @@ hf auth login
 hf repo create huggingaccounttest/pi05-lehome-my_lehome_run-599 --private
 
 # one-command upload of the step folder root (contains params/ and assets/)
-hf upload huggingaccounttest/pi05-lehome-my_lehome_run-599 \
-  /datadrive/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/my_lehome_run/599 \
+hf upload huggingaccounttest/pi05-all-lehome-data-20000 \
+  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/all_data_3_epoch/20000 \
   . \
   --repo-type model
+
+  
 
 
 2) Run Eval
@@ -90,12 +106,25 @@ export OPENPI_REPO=/datadrive/lehome-openpi
 export OPENPI_CONFIG_NAME=pi05_lehome_robot_finetune
 export HF_TOKEN=...   # if repo is private
 
+uv run scripts/serve_policy.py \
+  --port 8000 \
+  policy:checkpoint \
+  --policy.config pi05_lehome_robot_finetune \
+  --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/all_data_3_epoch/20000
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+
+pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
+
 python -m scripts.eval \
-  --policy_type openpi \
-  --policy_path "hf://huggingaccounttest/pi05-lehome-my_lehome_run-599" \
-  --garment_type top_long \
+  --policy_type openpi_ws \
+  --policy_path ws://20.244.4.116:8000 \
+  --garment_type custom \
   --num_episodes 2 \
   --task_description "fold the garment on the table" \
   --step_hz 30 \
   --enable_cameras \
-  --device cpu
+  --device cpu \
+  --headless
