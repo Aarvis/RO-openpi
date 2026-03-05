@@ -9,7 +9,7 @@ Implemented in `openpi`:
   - `observation.state`
   - `actions`
   - `task` (from prompt)
-- Infers FPS from timestamps.
+
 
 2. New LeHome input/output mapping for openpi
 - `src/openpi/policies/lehome_policy.py:31` (`LehomeInputs`)
