@@ -187,3 +187,15 @@ python -m scripts.eval \
   --enable_cameras \
   --device cpu \
   --headless
+
+
+python dik_solver_workflow/ik/augment_action_from_ik_and_obs_fk_to_camera_cv.py `
+  --input-dir D:/LeHome-Challenge/lehome-challenge/Datasets/all_episode_exports/four_types_merged/chunk-000__file-000/json_with_action_from_ik `
+  --output-dir D:/LeHome-Challenge/lehome-challenge/Datasets/all_episode_exports/four_types_merged/chunk-000__file-000/json_with_action_from_ik_camera_cv `
+  --glob "episode_*.json" `
+  --fk-json dik_solver_workflow/output/fk_from_usd_common.json `
+  --state-unit rad `
+  --pose-quat-order-world wxyz `
+  --pose-quat-order-out wxyz `
+  --overwrite
+

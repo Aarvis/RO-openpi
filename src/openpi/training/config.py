@@ -19,6 +19,7 @@ import openpi.models.pi0_fast as pi0_fast
 import openpi.models.tokenizer as _tokenizer
 import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
+import openpi.policies.lehome_camera_cv_policy as lehome_camera_cv_policy
 import openpi.policies.lehome_policy as lehome_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
@@ -398,6 +399,102 @@ class LeRobotLehomeDataConfig(DataConfigFactory):
         if self.use_delta_joint_actions:
             # For dual-arm SO101: (5 arm joints + 1 gripper) x 2
             # Keep grippers absolute and convert arm joints to delta.
+            delta_action_mask = _transforms.make_bool_mask(5, -1, 5, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
+    """
+    LeHome data config variant that transforms observation.state (12D joints) into
+    camera-frame EE pose features (16D) using:
+      - fk_from_usd_common.json
+      - top_camera_config_runtime_cv.json
+    """
+
+    use_delta_joint_actions: bool = False
+    # Number of model action dims consumed from model output (camera-CV EE pose).
+    action_dim: int = 16
+    # Final action dims returned by policy after IK conversion.
+    output_action_dim: int = 12
+    state_unit: str = "rad"
+    pose_quat_order: str = "wxyz"
+    dataset_joint_order_csv: str = (
+        "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
+    )
+    damping: float = 0.05
+    alpha: float = 1.0
+    line_search_alphas_csv: str = "1,0.5,0.25,0.05,1.5,2"
+    fallback_tol_factor: float = 1.1
+    pos_weight: float = 1.0
+    rot_weight: float = 1.0
+    max_iters: int = 80
+    tol_pos_m: float = 1e-4
+    tol_rot_deg: float = 0.2
+    max_step_norm: float = 0.2
+    enforce_limits: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/top_rgb": "observation.images.top_rgb",
+                        "observation/left_rgb": "observation.images.left_rgb",
+                        "observation/right_rgb": "observation.images.right_rgb",
+                        "observation/state": "observation.state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                lehome_camera_cv_policy.LehomeCameraCVInputs(
+                    model_type=model_config.model_type,
+                    state_unit=self.state_unit,
+                    pose_quat_order=self.pose_quat_order,
+                    dataset_joint_order_csv=self.dataset_joint_order_csv,
+                )
+            ],
+            outputs=[
+                lehome_camera_cv_policy.LehomeCameraCVOutputs(
+                    model_action_dim=self.action_dim,
+                    output_action_dim=self.output_action_dim,
+                    state_unit=self.state_unit,
+                    pose_quat_order=self.pose_quat_order,
+                    dataset_joint_order_csv=self.dataset_joint_order_csv,
+                    damping=self.damping,
+                    alpha=self.alpha,
+                    line_search_alphas_csv=self.line_search_alphas_csv,
+                    fallback_tol_factor=self.fallback_tol_factor,
+                    pos_weight=self.pos_weight,
+                    rot_weight=self.rot_weight,
+                    max_iters=self.max_iters,
+                    tol_pos_m=self.tol_pos_m,
+                    tol_rot_deg=self.tol_rot_deg,
+                    max_step_norm=self.max_step_norm,
+                    enforce_limits=self.enforce_limits,
+                )
+            ],
+        )
+
+        if self.use_delta_joint_actions:
             delta_action_mask = _transforms.make_bool_mask(5, -1, 5, -1)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
@@ -842,6 +939,27 @@ _CONFIGS = [
         batch_size=64,
         log_interval = 50,
         save_interval = 20_000,
+    ),
+    TrainConfig(
+        # LeHome variant: convert observation.state -> FK(world EE) -> camera_cv EE pose at policy input.
+        name="pi05_lehome_camera_cv_robot_finetune",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        num_workers=32,
+        data=LeRobotLehomeCameraCVDataConfig(
+            repo_id="local/lehome_all_episodes",
+            base_config=DataConfig(prompt_from_task=True),
+            use_delta_joint_actions=False,
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+            dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=30_000,
+        batch_size=64,
+        log_interval=50,
+        save_interval=20_000,
     ),
     #
     # Fine-tuning Aloha configs.
