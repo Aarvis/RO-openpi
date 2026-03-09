@@ -946,7 +946,7 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
         data=LeRobotLehomeCameraCVDataConfig(
-            repo_id="local/lehome_all_episodes",
+            repo_id="local/lehome_one_episode", #"local/lehome_all_episodes"
             base_config=DataConfig(prompt_from_task=True),
             use_delta_joint_actions=False,
             action_dim=16,
@@ -956,10 +956,14 @@ _CONFIGS = [
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=30_000,
+        # num_train_steps=8400,
+        # batch_size=64,
+        # log_interval=50,
+        # save_interval=4200,
+        num_train_steps=670,
         batch_size=64,
-        log_interval=50,
-        save_interval=20_000,
+        log_interval=20,
+        save_interval=670,
     ),
     #
     # Fine-tuning Aloha configs.
