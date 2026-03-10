@@ -27,36 +27,52 @@ Implemented in `openpi`:
 How to run:
 ```bash
 uv run examples/lehome/convert_episode_json_to_lerobot.py \
-  --json-path ../lehome-challenge/Datasets/episode_200.json \
-  --repo-name your_hf_username/lehome_robot \
-  --source-root ../lehome-challenge
+  --json-path /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports/four_types_merged/chunk-000__file-000/json/episode_000450.json \
+  --repo-namelocal/lehome_all_e \
+  --overwrite
 ```
 
 ```bash
-uv run ./Datasets/examples/lehome/convert_episode_json_to_lerobot.py \
+uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports \
   --json-glob "**/json/episode_*.json" \
   --repo-name local/lehome_all_episodes \
   --source-root .. \
-  --overwrite
+  --overwrite \
+  --workers 1
+```
+
+```bash
+uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports \
+  --json-glob "**/one_episode_json/episode_*.json" \
+  --repo-name local/lehome_one_episode \
+  --source-root .. \
+  --overwrite \
+  --workers 1
 ```
 
 Set cache properly
+```bash
 mkdir -p /datadrive/cache/openpi /datadrive/cache/hf /datadrive/hf_cache/lerobot
 export OPENPI_DATA_HOME=/datadrive/cache/openpi
 export HF_HOME=/datadrive/cache/hf
 export HUGGINGFACE_HUB_CACHE=/datadrive/cache/hf/hub
 export HF_LEROBOT_HOME=/datadrive/hf_cache/lerobot
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+```
 
-mkdir -p /datadrive/cache/hf/datasets /datadrive/tmp
-export HF_DATASETS_CACHE=/datadrive/cache/hf/datasets
-export TMPDIR=/datadrive/tmp
 
 Then:
 ```bash
+mkdir -p /scratch/hf/datasets /scratch/tmp
+export HF_DATASETS_CACHE=/scratch/hf/datasets
+export TMPDIR=/scratch/tmp
+
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_robot_finetune
+uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_robot_finetune --exp-name=my_lehome_run --overwrite
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_camera_cv_robot_finetune --exp-name=one_episode_run --overwrite
 ```
 
 Important:
@@ -91,8 +107,8 @@ hf auth login
 hf repo create huggingaccounttest/pi05-lehome-my_lehome_run-599 --private
 
 # one-command upload of the step folder root (contains params/ and assets/)
-hf upload huggingaccounttest/pi05-all-lehome-data-20000 \
-  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/all_data_3_epoch/20000 \
+hf upload huggingaccounttest/pi05-all-lehome-dik-2epoch \
+  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/all_episode_2_epoch/8399 \
   . \
   --repo-type model
 
@@ -168,8 +184,8 @@ uv pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
 uv run scripts/serve_policy.py \
   --port 8000 \
   policy:checkpoint \
-  --policy.config pi05_lehome_robot_finetune \
-  --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/all_data_3_epoch/20000
+  --policy.config pi05_lehome_camera_cv_robot_finetune \
+  --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/all_episode_2_epoch/8399
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0
@@ -232,4 +248,11 @@ python -m scripts.dataset_sim replay_json \
   --garment_name "Top_Long_Seen_8" \
   --step_hz 30 \
   --device cpu
+
+uv run lehome-camera-cv-policy-tests/evaluate_lehome_camera_cv_policy_roundtrip.py \
+--episodes-dir /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports/four_types_merged/chunk-000__file-000/json \
+--glob "episode_*.json" \
+--workers 16 \
+--out-json lehome-camera-cv-policy-tests\roundtrip_stats_policy_classes.json
+
 
