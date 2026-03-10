@@ -199,3 +199,37 @@ python dik_solver_workflow/ik/augment_action_from_ik_and_obs_fk_to_camera_cv.py 
   --pose-quat-order-out wxyz `
   --overwrite
 
+
+python lehome-camera-cv-policy-tests\evaluate_lehome_camera_cv_policy_roundtrip.py `
+  --episodes-dir d:\LeHome-Challenge\lehome-challenge\Datasets\all_episode_exports\four_types_merged\chunk-000__file-000\json `
+  --glob "episode_*.json" `
+  --out-json d:\LeHome-Challenge\openpi\lehome-camera-cv-policy-tests\roundtrip_stats_policy_classes.json
+
+
+
+python -m scripts.dataset_sim replay_json \
+--episode_json "/home/user/LEHOME/lehome-challenge/Datasets/episode_000450_with_fk_ee_with_action_from_ik.json" \
+--action_key "action.from_ik" \
+--garment_name "Top_Long_Seen_8" \
+--num_episodes 2 \
+--step_hz 30 \
+--device cpu
+
+
+python -m scripts.dataset_sim replay_json \
+  --episode_json "/home/user/LEHOME/lehome-challenge/Datasets/episode_000450_with_fk_ee_with_action_from_ik.json" \
+  --action_key "action.from_ik" \
+  --garment_name "Top_Long_Seen_8" \
+  --num_episodes 2 \
+  --step_hz 30 \
+  --device cpu
+
+python -m scripts.dataset_sim replay_json \
+  --episodes_dir "/home/user/LEHOME/lehome-challenge/Datasets/all_episode_exports/four_types_merged/chunk-000__file-000/json_with_action_from_ik" \
+  --glob "episode_*_with_fk_ee_with_action_from_ik.json" \
+  --num_episodes 10 \
+  --action_key "action.from_ik" \
+  --garment_name "Top_Long_Seen_8" \
+  --step_hz 30 \
+  --device cpu
+

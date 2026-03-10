@@ -7,9 +7,12 @@ Example:
 uv run examples/lehome/convert_episode_json_to_lerobot.py \
   --json-root ../lehome-challenge/Datasets/all_episode_exports \
   --json-glob "**/json/episode_*.json" \
-  --repo-name local/lehome_all_episodes
+  --repo-name local/lehome_all_episodes \
+  --workers 36
 """
 
+from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 import json
 from pathlib import Path
 import shutil
@@ -59,6 +62,63 @@ def _load_rows(json_path: Path) -> list[dict]:
     return rows
 
 
+def _prepare_episode(
+    json_path: Path,
+    source_root: Path,
+    state_dim: int,
+    action_dim: int,
+    default_prompt: str,
+) -> dict:
+    try:
+        rows = _load_rows(json_path)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "json_path": str(json_path),
+            "error": f"invalid JSON: {exc}",
+        }
+
+    row0 = rows[0]
+    state_dim_found = len(row0["observation.state"])
+    action_dim_found = len(row0["action"])
+    if state_dim_found != state_dim or action_dim_found != action_dim:
+        return {
+            "ok": False,
+            "json_path": str(json_path),
+            "error": (
+                "shape mismatch "
+                f"state_dim={state_dim_found} (expected {state_dim}), "
+                f"action_dim={action_dim_found} (expected {action_dim})"
+            ),
+        }
+
+    episode_prompt = str(row0.get("prompt", default_prompt))
+    frames: list[dict] = []
+    for row in rows:
+        frames.append(
+            {
+                "observation.images.top_rgb": _load_rgb_image(
+                    _resolve_path(row["observation.image.top_rgb"], root=source_root)
+                ),
+                "observation.images.left_rgb": _load_rgb_image(
+                    _resolve_path(row["observation.image.left_rgb"], root=source_root)
+                ),
+                "observation.images.right_rgb": _load_rgb_image(
+                    _resolve_path(row["observation.image.right_rgb"], root=source_root)
+                ),
+                "observation.state": np.asarray(row["observation.state"], dtype=np.float32),
+                "actions": np.asarray(row["action"], dtype=np.float32),
+                "task": str(row.get("prompt", episode_prompt)),
+            }
+        )
+
+    return {
+        "ok": True,
+        "json_path": str(json_path),
+        "frames": frames,
+    }
+
+
 def main(
     *,
     json_root: str = "../lehome-challenge/Datasets/all_episode_exports",
@@ -67,6 +127,7 @@ def main(
     source_root: str = "..",
     overwrite: bool = True,
     default_fps: int = 30,
+    workers: int = 36,
 ):
     json_root_obj = Path(json_root).resolve()
     source_root_obj = Path(source_root).resolve()
@@ -155,46 +216,41 @@ def main(
         "frames_saved": 0,
     }
 
-    for json_path in tqdm(episode_jsons, desc="Converting JSON episodes", unit="episode"):
-        try:
-            rows = _load_rows(json_path)
-        except Exception as exc:
-            stats["episodes_skipped"] += 1
-            print(f"[Warn] Skipping invalid JSON {json_path}: {exc}")
-            continue
+    workers = max(int(workers), 1)
+    if workers == 1:
+        prepared_iter = (
+            _prepare_episode(p, source_root_obj, state_dim, action_dim, prompt) for p in episode_jsons
+        )
+    else:
+        # Parallelize per-episode frame preparation while keeping dataset writes ordered and single-threaded.
+        pool = ThreadPoolExecutor(max_workers=workers)
+        prepared_iter = pool.map(
+            _prepare_episode,
+            episode_jsons,
+            repeat(source_root_obj),
+            repeat(state_dim),
+            repeat(action_dim),
+            repeat(prompt),
+        )
 
-        row0 = rows[0]
-        if len(row0["observation.state"]) != state_dim or len(row0["action"]) != action_dim:
-            stats["episodes_skipped"] += 1
-            print(
-                f"[Warn] Skipping {json_path}: shape mismatch "
-                f"state_dim={len(row0['observation.state'])} (expected {state_dim}), "
-                f"action_dim={len(row0['action'])} (expected {action_dim})"
-            )
-            continue
+    try:
+        for prepared in tqdm(prepared_iter, total=len(episode_jsons), desc="Converting JSON episodes", unit="episode"):
+            if not prepared["ok"]:
+                stats["episodes_skipped"] += 1
+                print(f"[Warn] Skipping {prepared['json_path']}: {prepared['error']}")
+                continue
 
-        episode_prompt = str(row0.get("prompt", prompt))
-        for row in rows:
-            frame = {
-                "observation.images.top_rgb": _load_rgb_image(
-                    _resolve_path(row["observation.image.top_rgb"], root=source_root_obj)
-                ),
-                "observation.images.left_rgb": _load_rgb_image(
-                    _resolve_path(row["observation.image.left_rgb"], root=source_root_obj)
-                ),
-                "observation.images.right_rgb": _load_rgb_image(
-                    _resolve_path(row["observation.image.right_rgb"], root=source_root_obj)
-                ),
-                "observation.state": np.asarray(row["observation.state"], dtype=np.float32),
-                "actions": np.asarray(row["action"], dtype=np.float32),
-                "task": str(row.get("prompt", episode_prompt)),
-            }
-            dataset.add_frame(frame)
+            frames = prepared["frames"]
+            for frame in frames:
+                dataset.add_frame(frame)
 
-        # Important: keeps episode boundaries for action horizon/windowing.
-        dataset.save_episode()
-        stats["episodes_saved"] += 1
-        stats["frames_saved"] += len(rows)
+            # Important: keeps episode boundaries for action horizon/windowing.
+            dataset.save_episode()
+            stats["episodes_saved"] += 1
+            stats["frames_saved"] += len(frames)
+    finally:
+        if workers > 1:
+            pool.shutdown(wait=True)
 
     print(f"\nSaved local LeRobot dataset to: {output_path}")
     print(f"repo_id={repo_name}, fps={fps}")
