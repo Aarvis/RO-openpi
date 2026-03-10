@@ -107,8 +107,8 @@ hf auth login
 hf repo create huggingaccounttest/pi05-lehome-my_lehome_run-599 --private
 
 # one-command upload of the step folder root (contains params/ and assets/)
-hf upload huggingaccounttest/pi05-all-lehome-data-20000 \
-  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/all_data_3_epoch/20000 \
+hf upload huggingaccounttest/pi05-all-lehome-dik-2epoch \
+  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/all_episode_2_epoch/8399 \
   . \
   --repo-type model
 
@@ -184,8 +184,8 @@ uv pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
 uv run scripts/serve_policy.py \
   --port 8000 \
   policy:checkpoint \
-  --policy.config pi05_lehome_robot_finetune \
-  --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/one_episode_run/669
+  --policy.config pi05_lehome_camera_cv_robot_finetune \
+  --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/all_episode_2_epoch/8399
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0
