@@ -66,10 +66,11 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot_weighted.py \
 uv run examples/lehome/parallel_convert_all_episode_json_to_lerobot_weighted.py \
   --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports \
   --json-glob "**/json/episode_*.json" \
-  --repo-name local/lehome_one_episode_weighted \
+  --repo-name local/lehome_one_episode_weighted_parallel \
   --source-root .. \
   --overwrite \
-  --workers 8
+  --workers 8 \
+  --temp-root /scratch/tmp
 ```
 
 
@@ -347,6 +348,21 @@ python -m parallel_eval \
   --record_episodes \
   --record_all_episodes \
   --no-record_keep_frame_images
+
+uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /path/to/episode_000000.json
+
+uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py \
+  --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/pant_long_merged/chunk-000__file-000/json/episode_000000.json
+
+uv run lehome-camera-cv-policy-tests/evaluate_lehome_camera_cv_policy_roundtrip.py \
+  --episodes-dir /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/pant_long_merged/chunk-000__file-000/json \
+  --glob "episode_*.json" \
+  --model-type pi05 \
+  --workers 8 \
+  --out-json output/lehome_camera_cv_policy_roundtrip_stats.json
+
+
+
 
 
 
