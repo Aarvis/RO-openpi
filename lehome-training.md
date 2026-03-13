@@ -352,10 +352,11 @@ python -m parallel_eval \
 uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /path/to/episode_000000.json
 
 uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py \
-  --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/pant_long_merged/chunk-000__file-000/json/episode_000000.json
+  --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000100.json \
+  --out-dir test_policy_continuity
 
 uv run lehome-camera-cv-policy-tests/evaluate_lehome_camera_cv_policy_roundtrip.py \
-  --episodes-dir /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/pant_long_merged/chunk-000__file-000/json \
+  --episodes-dir /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json \
   --glob "episode_*.json" \
   --model-type pi05 \
   --workers 8 \

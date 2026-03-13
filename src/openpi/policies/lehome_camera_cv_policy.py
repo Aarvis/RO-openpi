@@ -36,58 +36,6 @@ def _parse_image(image) -> np.ndarray:
     return image
 
 
-def _quat_slice(quat_order: str) -> tuple[int, int]:
-    if quat_order not in {"wxyz", "xyzw"}:
-        raise ValueError(f"Unsupported pose_quat_order: {quat_order}")
-    return (0, 4) if quat_order == "wxyz" else (3, 4)
-
-
-def _canonicalize_quaternion_hemisphere(quat: np.ndarray, quat_order: str) -> np.ndarray:
-    q = np.asarray(quat, dtype=np.float64).reshape(4).copy()
-    scalar_index, _ = _quat_slice(quat_order)
-    if q[scalar_index] < 0.0:
-        q = -q
-    return q
-
-
-def _match_quaternion_sign(quat: np.ndarray, reference: np.ndarray) -> np.ndarray:
-    q = np.asarray(quat, dtype=np.float64).reshape(4).copy()
-    ref = np.asarray(reference, dtype=np.float64).reshape(4)
-    if float(np.dot(q, ref)) < 0.0:
-        q = -q
-    return q
-
-
-def _canonicalize_pose16_inplace(pose16: np.ndarray, quat_order: str) -> np.ndarray:
-    pose = np.asarray(pose16, dtype=np.float64).reshape(16).copy()
-    pose[3:7] = _canonicalize_quaternion_hemisphere(pose[3:7], quat_order)
-    pose[11:15] = _canonicalize_quaternion_hemisphere(pose[11:15], quat_order)
-    return pose
-
-
-def _match_pose16_quaternion_signs_inplace(pose16: np.ndarray, reference_pose16: np.ndarray) -> np.ndarray:
-    pose = np.asarray(pose16, dtype=np.float64).reshape(16).copy()
-    ref = np.asarray(reference_pose16, dtype=np.float64).reshape(16)
-    pose[3:7] = _match_quaternion_sign(pose[3:7], ref[3:7])
-    pose[11:15] = _match_quaternion_sign(pose[11:15], ref[11:15])
-    return pose
-
-
-def _canonicalize_pose16_action_sequence(actions_cam_cv: np.ndarray, reference_pose16: np.ndarray) -> np.ndarray:
-    actions = np.asarray(actions_cam_cv, dtype=np.float64)
-    if actions.ndim == 1:
-        return _match_pose16_quaternion_signs_inplace(actions, reference_pose16)
-    if actions.ndim != 2:
-        raise ValueError(f"Unsupported canonicalization shape: {actions.shape}")
-
-    out = np.asarray(actions, dtype=np.float64).copy()
-    prev = np.asarray(reference_pose16, dtype=np.float64).reshape(16)
-    for i in range(out.shape[0]):
-        out[i, :16] = _match_pose16_quaternion_signs_inplace(out[i, :16], prev)
-        prev = out[i, :16]
-    return out
-
-
 @dataclasses.dataclass(frozen=True)
 class LehomeCameraCVInputs(transforms.DataTransformFn):
     # Determines which model will be used.
@@ -142,10 +90,7 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             dataset_joint_order_csv=str(self.dataset_joint_order_csv),
             pose_quat_order=str(self.pose_quat_order),
         )
-        state_cam_cv = _canonicalize_pose16_inplace(
-            transformer.state12_to_camera_pose16(raw_state),
-            quat_order=str(self.pose_quat_order),
-        ).astype(np.float32)
+        state_cam_cv = transformer.state12_to_camera_pose16(raw_state).astype(np.float32)
 
         inputs = {
             "state": state_cam_cv,
@@ -165,21 +110,15 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
                     raise ValueError(
                         f"Expected 1D actions with 12 values, got shape={actions.shape}"
                     )
-                actions_cam_cv = _canonicalize_pose16_action_sequence(
-                    transformer.state12_to_camera_pose16(actions),
-                    reference_pose16=state_cam_cv,
-                ).astype(np.float32)
+                actions_cam_cv = transformer.state12_to_camera_pose16(actions).astype(np.float32)
             elif actions.ndim == 2:
                 if actions.shape[-1] != 12:
                     raise ValueError(
                         f"Expected 2D actions with last dim 12, got shape={actions.shape}"
                     )
-                actions_cam_cv = _canonicalize_pose16_action_sequence(
-                    np.stack(
+                actions_cam_cv = np.stack(
                     [transformer.state12_to_camera_pose16(a) for a in actions],
                     axis=0,
-                    ),
-                    reference_pose16=state_cam_cv,
                 ).astype(np.float32)
             else:
                 raise ValueError(
@@ -243,10 +182,7 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
                 f"Model output has dim={actions.shape[-1]}, expected at least {self.model_action_dim}"
             )
 
-        state_cam_cv = _canonicalize_pose16_inplace(
-            np.asarray(data["state"], dtype=np.float64).reshape(-1)[: self.model_action_dim],
-            quat_order=str(self.pose_quat_order),
-        )
+        state_cam_cv = np.asarray(data["state"], dtype=np.float64).reshape(-1)
         if state_cam_cv.size < 16:
             raise ValueError(f"Expected state camera pose with at least 16 dims, got {state_cam_cv.size}")
 
@@ -270,15 +206,10 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
             pose_quat_order=str(self.pose_quat_order),
         )
 
-        actions = np.asarray(actions, dtype=np.float64).copy()
-        prev_target_cam16 = state_cam_cv.copy()
         out_actions = []
         # Convert each predicted 16D camera-CV target into 12D joints via world-frame IK.
         for i in range(actions.shape[0]):
-            target_cam16 = _match_pose16_quaternion_signs_inplace(
-                actions[i, : self.model_action_dim],
-                prev_target_cam16,
-            )
+            target_cam16 = actions[i, : self.model_action_dim]
             target_world16 = transformer.camera_pose16_to_world_pose16(target_cam16)
             q_hat = transformer.solve_world_pose16_to_state12(
                 target_pose16_world=target_world16,
@@ -298,6 +229,5 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
             out_actions.append(q_hat[: self.output_action_dim])
             # Roll the IK result forward for the next horizon step.
             q_cur = q_hat.copy()
-            prev_target_cam16 = target_cam16.copy()
 
         return {"actions": np.asarray(out_actions, dtype=np.float32)}
