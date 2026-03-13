@@ -52,6 +52,27 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --workers 1
 ```
 
+```bash
+uv run examples/lehome/convert_all_episode_json_to_lerobot_weighted.py \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports \
+  --json-glob "**/json/episode_*.json" \
+  --repo-name local/lehome_all_episodes_weighted \
+  --source-root .. \
+  --overwrite \
+  --workers 1
+```
+
+```bash
+uv run examples/lehome/parallel_convert_all_episode_json_to_lerobot_weighted.py \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports \
+  --json-glob "**/json/episode_*.json" \
+  --repo-name local/lehome_one_episode_weighted \
+  --source-root .. \
+  --overwrite \
+  --workers 8
+```
+
+
 Set cache properly
 ```bash
 mkdir -p /datadrive/cache/openpi /datadrive/cache/hf /datadrive/hf_cache/lerobot
