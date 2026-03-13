@@ -44,8 +44,8 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
 
 ```bash
 uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
-  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports \
-  --json-glob "**/one_episode_json/episode_*.json" \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports \
+  --json-glob "**/json/episode_*.json" \
   --repo-name local/lehome_one_episode \
   --source-root .. \
   --overwrite \
@@ -179,6 +179,12 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+unset CUDA_VISIBLE_DEVICES
+# or explicitly: export CUDA_VISIBLE_DEVICES=0,1,2,3
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
+
+
 uv pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
 
 uv run scripts/serve_policy.py \
@@ -191,7 +197,7 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 
-pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
+uv pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
 
 python -m scripts.eval \
   --policy_type openpi_ws \
@@ -203,6 +209,31 @@ python -m scripts.eval \
   --enable_cameras \
   --device cpu \
   --headless
+
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --step_hz 30 \
+  --garment_type custom \
+  --num_episodes 5 \
+  --max_workers 10 \
+  --policy_type openpi_ws \
+  --policy_paths ws://host:8001,ws://host:8002,ws://host:8003 \
+  --device cpu
+
+
+python -m parallel_eval \
+  --headless \
+  --garment_type custom \
+  --num_episodes 15 \
+  --max_workers 5 \
+  --policy_type openpi_ws \
+  --policy_base_ws_url ws://20.244.4.116 \
+  --policy_start_port 8000 \
+  --policy_port_step 1 \
+  --device cpu
+
+
 
 
 python dik_solver_workflow/ik/augment_action_from_ik_and_obs_fk_to_camera_cv.py `
@@ -254,5 +285,52 @@ uv run lehome-camera-cv-policy-tests/evaluate_lehome_camera_cv_policy_roundtrip.
 --glob "episode_*.json" \
 --workers 16 \
 --out-json lehome-camera-cv-policy-tests\roundtrip_stats_policy_classes.json
+
+
+python -m parallel_eval.tail_log --run_dir outputs/parallel_eval/run_20260311_132357_custom --worker_id 1 --follow
+
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --garment_type custom \
+  --num_episodes 2 \
+  --max_workers 8 \
+  --gpu_ids 0,1,2,3,4,5,6,7 \
+  --ramp_up_episode_gate 0 \
+  --worker_timeout_sec 7200 \
+  --policy_type openpi_ws \
+  --policy_base_ws_url ws://20.244.4.116 \
+  --policy_start_port 8000 \
+  --policy_port_step 1 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu
+
+
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --garment_type custom \
+  --num_episodes 20 \
+  --max_workers 2 \
+  --gpu_ids 0,1 \
+  --ramp_up_episode_gate 1 \
+  --worker_timeout_sec 14400 \
+  --policy_type openpi_ws \
+  --policy_base_ws_url ws://20.244.4.116 \
+  --policy_start_port 8000 \
+  --policy_port_step 1 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu \
+  --record_episodes \
+  --record_all_episodes \
+  --no-record_keep_frame_images
+
+
+
+
+
+
 
 
