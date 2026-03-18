@@ -5,6 +5,7 @@ import logging
 import jax
 import numpy as np
 import torch
+import tqdm_loggable.auto as tqdm
 
 import openpi.models.model as _model
 import openpi.training.config as _config
@@ -23,9 +24,48 @@ def _coerce_weight(value) -> float:
     return weight
 
 
+def _unwrap_dataset(dataset):
+    cur = dataset
+    seen = set()
+    while True:
+        next_dataset = getattr(cur, "_dataset", None)
+        if next_dataset is None or id(next_dataset) in seen:
+            return cur
+        seen.add(id(cur))
+        cur = next_dataset
+
+
+def _extract_sample_weights_fast(dataset) -> torch.Tensor | None:
+    raw_dataset = _unwrap_dataset(dataset)
+    for attr in ("hf_dataset", "_hf_dataset", "dataset", "_dataset"):
+        candidate = getattr(raw_dataset, attr, None)
+        if candidate is None:
+            continue
+        column_names = getattr(candidate, "column_names", None)
+        if column_names is None or "sample_weight" not in column_names:
+            continue
+        try:
+            weights = candidate["sample_weight"]
+            weights_tensor = torch.as_tensor([_coerce_weight(v) for v in weights], dtype=torch.double)
+            if weights_tensor.numel() == 0:
+                raise ValueError("Cannot build weighted sampler for an empty dataset.")
+            logging.info("Loaded sample weights from dataset column without per-sample decoding.")
+            return weights_tensor
+        except Exception as exc:
+            logging.warning("Fast sample_weight extraction failed, falling back to row scan: %s", exc)
+            return None
+    return None
+
+
 def _extract_sample_weights(dataset: _data_loader.Dataset) -> torch.Tensor:
+    fast_weights = _extract_sample_weights_fast(dataset)
+    if fast_weights is not None:
+        return fast_weights
+
+    dataset_len = len(dataset)
+    logging.info("Extracting sample weights by scanning %d dataset rows.", dataset_len)
     weights = []
-    for i in range(len(dataset)):
+    for i in tqdm.tqdm(range(dataset_len), desc="Extracting sample weights", unit="sample", dynamic_ncols=True):
         sample = dataset[i]
         weights.append(_coerce_weight(sample.get("sample_weight")))
     weights_tensor = torch.as_tensor(weights, dtype=torch.double)
@@ -120,4 +160,3 @@ def create_weighted_torch_data_loader(
         framework=framework,
     )
     return _data_loader.DataLoaderImpl(data_config, data_loader)
-

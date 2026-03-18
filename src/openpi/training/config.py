@@ -670,8 +670,12 @@ class TrainConfig:
     log_interval: int = 100
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
+    # Explicit completed training steps to save checkpoints at. When non-empty, this overrides save_interval.
+    save_steps: tuple[int, ...] = ()
     # If set, any existing checkpoints matching step % keep_period == 0 will not be deleted.
     keep_period: int | None = 5000
+    # Number of recent checkpoints to keep in addition to any keep_period-preserved checkpoints.
+    max_to_keep: int | None = 1
 
     # If true, will overwrite the checkpoint directory if it already exists.
     overwrite: bool = False
@@ -946,7 +950,7 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
         data=LeRobotLehomeCameraCVDataConfig(
-            repo_id="local/lehome_all_episodes", #"local/lehome_all_episodes"
+            repo_id="local/lehome_all_episodes_weighted",
             base_config=DataConfig(prompt_from_task=True),
             use_delta_joint_actions=False,
             action_dim=16,
@@ -955,11 +959,19 @@ _CONFIGS = [
             pose_quat_order="wxyz",
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=4200,
+            peak_lr=1e-4,
+            decay_steps=50000,
+            decay_lr=5e-6,
+        ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=8400,
+        num_train_steps=50000,
         batch_size=64,
         log_interval=50,
-        save_interval=4200,
+        save_steps=(8400, 32000, 50000),
+        keep_period=None,
+        max_to_keep=3,
         # num_train_steps=1000,
         # batch_size=64,
         # log_interval=50,

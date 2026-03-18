@@ -1,0 +1,1 @@
+uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000200.json

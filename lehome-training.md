@@ -94,7 +94,10 @@ export TMPDIR=/scratch/tmp
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_robot_finetune
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_robot_finetune --exp-name=my_lehome_run --overwrite
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_camera_cv_robot_finetune --exp-name=one_episode_run --overwrite
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_camera_cv_robot_finetune --exp-name=one_episode_run --resume
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train_weighted.py pi05_lehome_camera_cv_robot_finetune --exp-name lehome_cv_weighted_run1 --resume
+
 ```
 
 Important:
@@ -361,6 +364,52 @@ uv run lehome-camera-cv-policy-tests/evaluate_lehome_camera_cv_policy_roundtrip.
   --model-type pi05 \
   --workers 8 \
   --out-json output/lehome_camera_cv_policy_roundtrip_stats.json
+
+python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py --episode-json D:\LeHome-Challenge\lehome-challenge\test_outputs_camera_cv\episode_000450_with_fk_ee_with_camera_cv.json
+
+python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py --episode-json D:\LeHome-Challenge\lehome-challenge\test_outputs_camera_cv\episode_000450_with_fk_ee_with_camera_cv.json
+
+
+
+python dik_solver_workflow/augment_all_episode_jsons_with_fk_ee.py --input-dir D:\LeHome-Challenge\lehome-challenge\Datasets\all_garment_type_exports\top_long_merged\chunk-000__file-000\json --glob "episode_000200.json" --output-dir test_outputs --overwrite
+
+
+python dik_solver_workflow/augment_all_episode_jsons_with_fk_ee.py --input-dir D:\LeHome-Challenge\lehome-challenge\Datasets\all_episode_exports\four_types_merged\chunk-000__file-000\json --glob "episode_000450.json" --output-dir test_outputs --overwrite
+
+
+python dik_solver_workflow/ik/write_action_from_ik_batch_parallel.py `
+  --episodes-dir test_outputs `
+  --glob "episode_000450_with_fk_ee.json" `
+  --fk-json dik_solver_workflow/output/fk_from_usd_common.json `
+  --state-unit rad `
+  --pose-quat-order wxyz `
+  --line-search-alphas 2,1,0.5,0.25,0.05 `
+  --damping 0.1 `
+  --alpha 1.0 `
+  --max-iters 200 `
+  --rot-weight 2 `
+  --workers 1 `
+  --out-dir D:\LeHome-Challenge\lehome-challenge\Datasets\all_episode_exports\four_types_merged\chunk-000__file-000
+
+
+
+python dik_solver_workflow/ik/augment_action_from_ik_and_obs_fk_to_camera_cv.py `
+  --input-dir D:\LeHome-Challenge\lehome-challenge\Datasets\all_episode_exports\four_types_merged\chunk-000__file-000 `
+  --output-dir test_outputs_camera_cv `
+  --glob "episode_000450_with_fk_ee_with_action_from_ik.json" `
+  --overwrite
+
+
+python dik_solver_workflow/ik/augment_action_from_ik_and_obs_fk_to_camera_cv.py `
+  --input-dir test_outputs `
+  --output-dir test_outputs_camera_cv `
+  --glob "episode_000450_with_fk_ee.json" `
+  --overwrite
+
+python dik_solver_workflow/utils/stitch_episode_images_to_video.py `
+  --episode-json D:\LeHome-Challenge\lehome-challenge\Datasets\all_garment_type_exports\top_long_merged\chunk-000__file-000\json\episode_000200.json `
+  --output-dir D:\LeHome-Challenge\lehome-challenge\test_outputs\videos `
+  --fps 30
 
 
 

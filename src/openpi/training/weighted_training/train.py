@@ -16,9 +16,9 @@ import wandb
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
 import openpi.training.sharding as sharding
+import openpi.training.train_lib as _base_train
 import openpi.training.utils as training_utils
 import openpi.training.weighted_training.data_loader as _weighted_data_loader
-from scripts import train as _base_train
 
 
 def main(config: _config.TrainConfig):
@@ -42,6 +42,7 @@ def main(config: _config.TrainConfig):
     checkpoint_manager, resuming = _checkpoints.initialize_checkpoint_dir(
         config.checkpoint_dir,
         keep_period=config.keep_period,
+        max_to_keep=config.max_to_keep,
         overwrite=config.overwrite,
         resume=config.resume,
     )
@@ -87,18 +88,19 @@ def main(config: _config.TrainConfig):
     for step in pbar:
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
+        completed_step = int(train_state.step)
         infos.append(info)
-        if step % config.log_interval == 0:
+        if completed_step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
-            pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
+            pbar.write(f"Step {completed_step}: {info_str}")
+            wandb.log(reduced_info, step=completed_step)
             infos = []
         batch = next(data_iter)
 
-        if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)
+        if completed_step > start_step and _base_train.should_save_checkpoint(config, completed_step):
+            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, completed_step)
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()
@@ -106,4 +108,3 @@ def main(config: _config.TrainConfig):
 
 def cli() -> None:
     main(_config.cli())
-

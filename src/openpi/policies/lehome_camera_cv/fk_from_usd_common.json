@@ -9,7 +9,8 @@
     "angle_convention": "q_* symbols are radians",
     "quaternion_convention": {
       "usd_localRot*_wxyz": "[w,x,y,z]",
-      "base_rot_xyzw": "[x,y,z,w]"
+      "base_rot_wxyz": "[w,x,y,z]",
+      "base_rot_xyzw_legacy_input": "[x,y,z,w]"
     }
   },
   "base_setup": {
@@ -20,22 +21,23 @@
         -0.25,
         0.5
       ],
-      "rot_xyzw": [
+      "rot_wxyz": [
         0.0,
         0.0,
         0.0,
         1.0
       ],
+      "rot_source_key": "rot_wxyz",
       "T_world_base": [
         [
-          1.0,
+          -1.0,
           0.0,
           0.0,
           -0.23
         ],
         [
           0.0,
-          1.0,
+          -1.0,
           0.0,
           -0.25
         ],
@@ -59,22 +61,23 @@
         -0.25,
         0.5
       ],
-      "rot_xyzw": [
+      "rot_wxyz": [
         0.0,
         0.0,
         0.0,
         1.0
       ],
+      "rot_source_key": "rot_wxyz",
       "T_world_base": [
         [
-          1.0,
+          -1.0,
           0.0,
           0.0,
           0.23
         ],
         [
           0.0,
-          1.0,
+          -1.0,
           0.0,
           -0.25
         ],

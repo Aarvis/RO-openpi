@@ -36,6 +36,86 @@ def _parse_image(image) -> np.ndarray:
     return image
 
 
+def _canonicalize_quaternion(
+    quat: np.ndarray,
+    *,
+    quat_order: str,
+    ref_quat: np.ndarray | None = None,
+    eps: float = 1e-12,
+) -> np.ndarray:
+    q = np.asarray(quat, dtype=np.float64).reshape(4).copy()
+    if ref_quat is not None:
+        ref = np.asarray(ref_quat, dtype=np.float64).reshape(4)
+        if float(np.linalg.norm(q)) > eps and float(np.linalg.norm(ref)) > eps and float(np.dot(q, ref)) < 0.0:
+            q = -q
+        return q
+
+    scalar_idx = 0 if quat_order == "wxyz" else 3
+    if q[scalar_idx] < -eps:
+        return -q
+    if abs(float(q[scalar_idx])) <= eps:
+        for value in q:
+            if abs(float(value)) <= eps:
+                continue
+            if float(value) < 0.0:
+                return -q
+            break
+    return q
+
+
+def _canonicalize_pose8_quaternion(
+    pose8: np.ndarray,
+    *,
+    quat_order: str,
+    ref_pose8: np.ndarray | None = None,
+) -> np.ndarray:
+    pose = np.asarray(pose8, dtype=np.float64).reshape(8).copy()
+    ref_quat = None if ref_pose8 is None else np.asarray(ref_pose8, dtype=np.float64).reshape(8)[3:7]
+    pose[3:7] = _canonicalize_quaternion(pose[3:7], quat_order=quat_order, ref_quat=ref_quat)
+    return pose
+
+
+def _canonicalize_pose16_quaternions(
+    pose16: np.ndarray,
+    *,
+    quat_order: str,
+    ref_pose16: np.ndarray | None = None,
+) -> np.ndarray:
+    pose = np.asarray(pose16, dtype=np.float64).reshape(16).copy()
+    ref = None if ref_pose16 is None else np.asarray(ref_pose16, dtype=np.float64).reshape(16)
+    pose[:8] = _canonicalize_pose8_quaternion(
+        pose[:8],
+        quat_order=quat_order,
+        ref_pose8=None if ref is None else ref[:8],
+    )
+    pose[8:16] = _canonicalize_pose8_quaternion(
+        pose[8:16],
+        quat_order=quat_order,
+        ref_pose8=None if ref is None else ref[8:16],
+    )
+    return pose
+
+
+def _canonicalize_pose16_sequence(
+    pose16_seq: np.ndarray,
+    *,
+    quat_order: str,
+    initial_ref_pose16: np.ndarray | None = None,
+) -> np.ndarray:
+    seq = np.asarray(pose16_seq, dtype=np.float64)
+    if seq.ndim != 2 or seq.shape[1] != 16:
+        raise ValueError(f"Expected pose16 sequence with shape (T,16), got {seq.shape}")
+    out = seq.copy()
+    prev = None if initial_ref_pose16 is None else _canonicalize_pose16_quaternions(
+        initial_ref_pose16,
+        quat_order=quat_order,
+    )
+    for i in range(out.shape[0]):
+        out[i] = _canonicalize_pose16_quaternions(out[i], quat_order=quat_order, ref_pose16=prev)
+        prev = out[i]
+    return out
+
+
 @dataclasses.dataclass(frozen=True)
 class LehomeCameraCVInputs(transforms.DataTransformFn):
     # Determines which model will be used.
@@ -90,7 +170,10 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             dataset_joint_order_csv=str(self.dataset_joint_order_csv),
             pose_quat_order=str(self.pose_quat_order),
         )
-        state_cam_cv = transformer.state12_to_camera_pose16(raw_state).astype(np.float32)
+        state_cam_cv = _canonicalize_pose16_quaternions(
+            transformer.state12_to_camera_pose16(raw_state),
+            quat_order=str(self.pose_quat_order),
+        ).astype(np.float32)
 
         inputs = {
             "state": state_cam_cv,
@@ -110,15 +193,23 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
                     raise ValueError(
                         f"Expected 1D actions with 12 values, got shape={actions.shape}"
                     )
-                actions_cam_cv = transformer.state12_to_camera_pose16(actions).astype(np.float32)
+                actions_cam_cv = _canonicalize_pose16_sequence(
+                    transformer.state12_to_camera_pose16(actions)[np.newaxis, :],
+                    quat_order=str(self.pose_quat_order),
+                    initial_ref_pose16=state_cam_cv,
+                )[0].astype(np.float32)
             elif actions.ndim == 2:
                 if actions.shape[-1] != 12:
                     raise ValueError(
                         f"Expected 2D actions with last dim 12, got shape={actions.shape}"
                     )
-                actions_cam_cv = np.stack(
-                    [transformer.state12_to_camera_pose16(a) for a in actions],
-                    axis=0,
+                actions_cam_cv = _canonicalize_pose16_sequence(
+                    np.stack(
+                        [transformer.state12_to_camera_pose16(a) for a in actions],
+                        axis=0,
+                    ),
+                    quat_order=str(self.pose_quat_order),
+                    initial_ref_pose16=state_cam_cv,
                 ).astype(np.float32)
             else:
                 raise ValueError(
@@ -185,6 +276,13 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
         state_cam_cv = np.asarray(data["state"], dtype=np.float64).reshape(-1)
         if state_cam_cv.size < 16:
             raise ValueError(f"Expected state camera pose with at least 16 dims, got {state_cam_cv.size}")
+        state_cam_cv = _canonicalize_pose16_quaternions(state_cam_cv[:16], quat_order=str(self.pose_quat_order))
+
+        actions = _canonicalize_pose16_sequence(
+            actions[:, : self.model_action_dim],
+            quat_order=str(self.pose_quat_order),
+            initial_ref_pose16=state_cam_cv,
+        )
 
         q_src = data.get("state_joint", data.get("state"))
         q_cur = np.asarray(q_src, dtype=np.float64).reshape(-1)
@@ -209,7 +307,7 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
         out_actions = []
         # Convert each predicted 16D camera-CV target into 12D joints via world-frame IK.
         for i in range(actions.shape[0]):
-            target_cam16 = actions[i, : self.model_action_dim]
+            target_cam16 = actions[i]
             target_world16 = transformer.camera_pose16_to_world_pose16(target_cam16)
             q_hat = transformer.solve_world_pose16_to_state12(
                 target_pose16_world=target_world16,
