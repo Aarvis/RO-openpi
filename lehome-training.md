@@ -94,10 +94,15 @@ export TMPDIR=/scratch/tmp
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_robot_finetune
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_robot_finetune --exp-name=my_lehome_run --overwrite
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_camera_cv_robot_finetune --exp-name=one_episode_run --resume
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_camera_cv_robot_finetune --exp-name=one_episode_run --overwrite
 
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train_weighted.py pi05_lehome_camera_cv_robot_finetune --exp-name lehome_cv_weighted_run1 --resume
+tmux show -g mouse
+tmux set -g mouse on
+tmux new -s train
+tmux attach -t train
+Ctrl-b d
 
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train_weighted.py pi05_lehome_camera_cv_robot_finetune --exp-name lehome_cv_weighted_run1 --overwrite
 ```
 
 Important:
@@ -352,7 +357,11 @@ python -m parallel_eval \
   --record_all_episodes \
   --no-record_keep_frame_images
 
-uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /path/to/episode_000000.json
+uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000150.json
+
+uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000240.json
+
+
 
 uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py \
   --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000100.json \
@@ -410,6 +419,11 @@ python dik_solver_workflow/utils/stitch_episode_images_to_video.py `
   --episode-json D:\LeHome-Challenge\lehome-challenge\Datasets\all_garment_type_exports\top_long_merged\chunk-000__file-000\json\episode_000200.json `
   --output-dir D:\LeHome-Challenge\lehome-challenge\test_outputs\videos `
   --fps 30
+
+
+python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py \
+  --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000100.json 
+
 
 
 
