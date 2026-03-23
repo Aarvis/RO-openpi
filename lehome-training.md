@@ -137,8 +137,8 @@ hf auth login
 hf repo create huggingaccounttest/pi05-lehome-my_lehome_run-599 --private
 
 # one-command upload of the step folder root (contains params/ and assets/)
-hf upload huggingaccounttest/pi05-all-lehome-dik-2epoch \
-  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/all_episode_2_epoch/8399 \
+hf upload huggingaccounttest/pi05-all-lehome-dik-20K \
+  /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_cv_weighted_run1/20000 \
   . \
   --repo-type model
 
@@ -177,8 +177,23 @@ uv run scripts/serve_policy.py \
   --policy.config pi05_lehome_robot_finetune \
   --policy.dir /home/user/LEHOME/hf_ckpts/pi05-lehome-my_lehome_run-599
 ```
+```bash
+uv run scripts/multi_serve_policy.py \
+  --num-servers 4 \
+  --start-port 8000 \
+  --gpu-id 0 \
+  --total-gpu-fraction 0.96 \
+  --xla-preallocate \
+  --stagger-seconds 2.0 \
+  --log-dir logs/multi_serve_policy \
+  -- \
+  policy:checkpoint \
+  --policy.config pi05_lehome_camera_cv_robot_finetune \
+  --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_cv_weighted_run1/63000
+```
 
 Then keep using LeHome with `--policy_type openpi_ws` pointing to `ws://127.0.0.1:8000`.
+
 
 
 
@@ -233,7 +248,7 @@ python -m scripts.eval \
   --policy_type openpi_ws \
   --policy_path ws://20.244.4.116:8000 \
   --garment_type custom \
-  --num_episodes 2 \
+  --num_episodes 1 \
   --task_description "fold the garment on the table" \
   --step_hz 30 \
   --enable_cameras \
