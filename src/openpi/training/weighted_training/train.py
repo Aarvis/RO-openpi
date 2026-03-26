@@ -15,6 +15,7 @@ import wandb
 
 import openpi.training.checkpoints as _checkpoints
 import openpi.training.config as _config
+import openpi.training.data_loader as _data_loader
 import openpi.training.sharding as sharding
 import openpi.training.train_lib as _base_train
 import openpi.training.utils as training_utils
@@ -28,6 +29,10 @@ def main(config: _config.TrainConfig):
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(
             f"Batch size {config.batch_size} must be divisible by the number of devices {jax.device_count()}."
+        )
+    if config.run_val and config.resolved_val_batch_size % jax.device_count() != 0:
+        raise ValueError(
+            f"Validation batch size {config.resolved_val_batch_size} must be divisible by the number of devices {jax.device_count()}."
         )
 
     jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
@@ -52,9 +57,19 @@ def main(config: _config.TrainConfig):
         config,
         sharding=data_sharding,
     )
+    val_loader = _data_loader.create_validation_data_loader(
+        config,
+        sharding=data_sharding,
+    )
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info("Initialized weighted data loader:\n%s", training_utils.array_tree_to_info(batch))
+    if val_loader is not None:
+        logging.info(
+            "Initialized validation data loader from repo_id=%s with batch_size=%d",
+            config.val_repo_id,
+            config.resolved_val_batch_size,
+        )
 
     images_to_log = [
         wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
@@ -75,6 +90,13 @@ def main(config: _config.TrainConfig):
         out_shardings=(train_state_sharding, replicated_sharding),
         donate_argnums=(1,),
     )
+    pval_step = None
+    if val_loader is not None:
+        pval_step = jax.jit(
+            functools.partial(_base_train.eval_step, config),
+            in_shardings=(replicated_sharding, train_state_sharding, data_sharding),
+            out_shardings=replicated_sharding,
+        )
 
     start_step = int(train_state.step)
     pbar = tqdm.tqdm(
@@ -98,6 +120,24 @@ def main(config: _config.TrainConfig):
             wandb.log(reduced_info, step=completed_step)
             infos = []
         batch = next(data_iter)
+
+        if val_loader is not None and pval_step is not None and completed_step % config.val_frequency == 0:
+            val_infos = []
+            val_batches = 0
+            for val_batch in val_loader:
+                with sharding.set_mesh(mesh):
+                    val_info = pval_step(train_rng, train_state, val_batch)
+                val_infos.append(val_info)
+                val_batches += 1
+
+            stacked_val_infos = common_utils.stack_forest(val_infos)
+            reduced_val_info = jax.device_get(jax.tree.map(jnp.mean, stacked_val_infos))
+            val_info_str = ", ".join(f"val_{k}={v:.4f}" for k, v in reduced_val_info.items())
+            pbar.write(f"Step {completed_step}: {val_info_str}, val_batches={val_batches}")
+            wandb.log(
+                {**{f"val/{k}": v for k, v in reduced_val_info.items()}, "val/num_batches": val_batches},
+                step=completed_step,
+            )
 
         if completed_step > start_step and _base_train.should_save_checkpoint(config, completed_step):
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, completed_step)

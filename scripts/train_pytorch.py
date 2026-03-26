@@ -306,6 +306,48 @@ def log_memory_usage(device, step, phase="unknown"):
     )
 
 
+def run_validation(model, val_loader, device, *, use_ddp: bool):
+    was_training = model.training
+    model.eval()
+
+    local_loss_sum = 0.0
+    local_batches = 0
+
+    with torch.no_grad():
+        for observation, actions in val_loader:
+            observation = jax.tree.map(lambda x: x.to(device), observation)
+            actions = actions.to(torch.float32)
+            actions = actions.to(device)
+
+            losses = model(observation, actions)
+            if isinstance(losses, list | tuple):
+                losses = torch.stack(losses)
+            elif not isinstance(losses, torch.Tensor):
+                losses = torch.tensor(losses, device=device, dtype=torch.float32)
+
+            local_loss_sum += float(losses.mean().item())
+            local_batches += 1
+
+    total_loss_sum = local_loss_sum
+    total_batches = local_batches
+    if use_ddp:
+        stats = torch.tensor([local_loss_sum, float(local_batches)], device=device, dtype=torch.float64)
+        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
+        total_loss_sum = float(stats[0].item())
+        total_batches = int(stats[1].item())
+
+    if was_training:
+        model.train()
+
+    if total_batches <= 0:
+        raise ValueError("Validation loader produced zero batches.")
+
+    return {
+        "loss": total_loss_sum / total_batches,
+        "num_batches": total_batches,
+    }
+
+
 def train_loop(config: _config.TrainConfig):
     use_ddp, local_rank, device = setup_ddp()
     is_main = (not use_ddp) or (dist.get_rank() == 0)
@@ -357,6 +399,13 @@ def train_loop(config: _config.TrainConfig):
 
     # Pass the original batch size to data loader - it will handle DDP splitting internally
     loader, data_config = build_datasets(config)
+    val_loader = _data.create_validation_data_loader(config, framework="pytorch")
+    if val_loader is not None and is_main:
+        logging.info(
+            "Initialized validation data loader from repo_id=%s with batch_size=%d",
+            config.val_repo_id,
+            config.resolved_val_batch_size,
+        )
 
     # Log sample images to wandb on first batch
     if is_main and config.wandb_enabled and not resuming:
@@ -601,6 +650,23 @@ def train_loop(config: _config.TrainConfig):
                 infos = []  # Reset stats collection
 
             global_step += 1
+            if val_loader is not None and global_step % config.val_frequency == 0:
+                val_info = run_validation(model, val_loader, device, use_ddp=use_ddp)
+                if is_main:
+                    logging.info(
+                        "step=%d val_loss=%.4f val_batches=%d",
+                        global_step,
+                        val_info["loss"],
+                        val_info["num_batches"],
+                    )
+                    if config.wandb_enabled:
+                        wandb.log(
+                            {
+                                "val/loss": val_info["loss"],
+                                "val/num_batches": val_info["num_batches"],
+                            },
+                            step=global_step,
+                        )
             # Save checkpoint using the new mechanism
             save_checkpoint(model, optim, global_step, config, is_main, data_config)
 

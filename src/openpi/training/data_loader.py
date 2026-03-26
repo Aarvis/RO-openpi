@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Sequence
+import dataclasses
 import logging
 import multiprocessing
 import os
@@ -271,6 +272,105 @@ def create_data_loader(
     )
 
 
+def _get_local_batch_size(batch_size: int, framework: Literal["jax", "pytorch"]) -> int:
+    if framework == "pytorch":
+        if torch.distributed.is_initialized():
+            return batch_size // torch.distributed.get_world_size()
+        return batch_size
+    return batch_size // jax.process_count()
+
+
+def _get_num_batches_for_full_pass(
+    dataset_len: int,
+    local_batch_size: int,
+    *,
+    global_batch_size: int | None = None,
+    sharded_across_processes: bool = False,
+) -> int:
+    if sharded_across_processes:
+        if global_batch_size is None:
+            raise ValueError("global_batch_size must be provided when sharded_across_processes is true.")
+        num_batches = dataset_len // global_batch_size
+    else:
+        num_batches = dataset_len // local_batch_size
+    if num_batches <= 0:
+        raise ValueError(
+            f"Dataset size ({dataset_len}) must be at least one full local batch ({local_batch_size}) for validation."
+        )
+    return num_batches
+
+
+def create_validation_data_loader(
+    config: _config.TrainConfig,
+    *,
+    sharding: jax.sharding.Sharding | None = None,
+    skip_norm_stats: bool = False,
+    framework: Literal["jax", "pytorch"] = "jax",
+) -> DataLoader[tuple[_model.Observation, _model.Actions]] | None:
+    if not config.run_val:
+        return None
+    if config.val_repo_id is None:
+        raise ValueError("Validation requested, but val_repo_id is not set.")
+
+    data_config = config.data.create(config.assets_dirs, config.model)
+    val_data_config = dataclasses.replace(data_config, repo_id=config.val_repo_id)
+    val_batch_size = config.resolved_val_batch_size
+
+    if val_data_config.rlds_data_dir is not None:
+        if framework == "pytorch":
+            raise NotImplementedError("PyTorch RLDS validation data loader is not supported yet")
+        dataset = create_rlds_dataset(
+            val_data_config,
+            action_horizon=config.model.action_horizon,
+            batch_size=val_batch_size,
+            shuffle=False,
+        )
+        dataset = transform_iterable_dataset(dataset, val_data_config, skip_norm_stats=skip_norm_stats, is_batched=True)
+        num_batches = _get_num_batches_for_full_pass(len(dataset), val_batch_size)
+        return DataLoaderImpl(
+            val_data_config,
+            RLDSDataLoader(
+                dataset,
+                sharding=sharding,
+                num_batches=num_batches,
+            ),
+        )
+
+    dataset = create_torch_dataset(val_data_config, config.model.action_horizon, config.model)
+    dataset = transform_dataset(dataset, val_data_config, skip_norm_stats=skip_norm_stats)
+    local_batch_size = _get_local_batch_size(val_batch_size, framework)
+    sampler = None
+    if framework == "pytorch" and torch.distributed.is_initialized():
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=torch.distributed.get_world_size(),
+            rank=torch.distributed.get_rank(),
+            shuffle=False,
+            drop_last=True,
+        )
+    num_batches = _get_num_batches_for_full_pass(
+        len(dataset),
+        local_batch_size,
+        global_batch_size=val_batch_size,
+        sharded_across_processes=sampler is not None,
+    )
+
+    return DataLoaderImpl(
+        val_data_config,
+        TorchDataLoader(
+            dataset,
+            local_batch_size=local_batch_size,
+            sharding=None if framework == "pytorch" else sharding,
+            shuffle=False,
+            sampler=sampler,
+            num_batches=num_batches,
+            num_workers=config.num_workers,
+            seed=config.seed,
+            framework=framework,
+        ),
+    )
+
+
 def create_torch_data_loader(
     data_config: _config.DataConfig,
     model_config: _model.BaseModelConfig,
@@ -318,11 +418,7 @@ def create_torch_data_loader(
                 shuffle=shuffle,
                 drop_last=True,
             )
-            local_batch_size = batch_size // torch.distributed.get_world_size()
-        else:
-            local_batch_size = batch_size
-    else:
-        local_batch_size = batch_size // jax.process_count()
+    local_batch_size = _get_local_batch_size(batch_size, framework)
 
     logging.info(f"local_batch_size: {local_batch_size}")
     data_loader = TorchDataLoader(

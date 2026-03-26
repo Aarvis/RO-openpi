@@ -768,6 +768,14 @@ class TrainConfig:
 
     # How often (in steps) to log training metrics.
     log_interval: int = 100
+    # If true, run validation on a separate dataset during training.
+    run_val: bool = False
+    # Validation dataset repo id. Uses the same transforms and normalization assets as training.
+    val_repo_id: str | None = None
+    # How often (in steps) to run validation.
+    val_frequency: int = 1000
+    # Global validation batch size. If not provided, defaults to the training batch size.
+    val_batch_size: int | None = None
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # Explicit completed training steps to save checkpoints at. When non-empty, this overrides save_interval.
@@ -811,9 +819,19 @@ class TrainConfig:
         """Get the filter for the trainable parameters."""
         return nnx.All(nnx.Param, nnx.Not(self.freeze_filter))
 
+    @property
+    def resolved_val_batch_size(self) -> int:
+        return self.val_batch_size or self.batch_size
+
     def __post_init__(self) -> None:
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
+        if self.run_val and not self.val_repo_id:
+            raise ValueError("--val_repo_id must be set when --run_val is true.")
+        if self.val_frequency <= 0:
+            raise ValueError("--val_frequency must be greater than 0.")
+        if self.val_batch_size is not None and self.val_batch_size <= 0:
+            raise ValueError("--val_batch_size must be greater than 0 when set.")
 
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -1029,6 +1047,10 @@ _CONFIGS = [
         name="pi05_lehome_robot_finetune",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
+        run_val=True,
+        val_repo_id="local/lehome_all_episodes",
+        val_frequency=1000,
+        val_batch_size=64,
         data=LeRobotLehomeDataConfig(
             # Replace with your local/HF LeRobot repo id.
             # repo_id="huggingaccounttest/lehome-openpi-episode",
@@ -1049,6 +1071,10 @@ _CONFIGS = [
         name="pi05_lehome_camera_cv_robot_finetune",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
+        run_val=True,
+        val_repo_id="local/lehome_all_episodes_weighted",
+        val_frequency=1000,
+        val_batch_size=64,
         data=LeRobotLehomeCameraCVDataConfig(
             repo_id="local/lehome_all_episodes_weighted",
             base_config=DataConfig(prompt_from_task=True),
@@ -1082,6 +1108,10 @@ _CONFIGS = [
         name="pi05_lehome_camera_cv_action_chunked_robot_finetune",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
+        run_val=True,
+        val_repo_id="local/lehome_action_chunked_sample",
+        val_frequency=1000,
+        val_batch_size=64,
         data=LeRobotLehomeCameraCVActionChunkedDataConfig(
             repo_id="local/lehome_action_chunked_sample",
             base_config=DataConfig(prompt_from_task=True),

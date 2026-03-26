@@ -176,6 +176,22 @@ def train_step(
     return new_state, info
 
 
+@at.typecheck
+def eval_step(
+    config: _config.TrainConfig,
+    rng: at.KeyArrayLike,
+    state: training_utils.TrainState,
+    batch: tuple[_model.Observation, _model.Actions],
+) -> dict[str, at.Array]:
+    model = nnx.merge(state.model_def, state.params)
+    model.eval()
+
+    eval_rng = jax.random.fold_in(rng, state.step)
+    observation, actions = batch
+    loss = jnp.mean(model.compute_loss(eval_rng, observation, actions, train=False))
+    return {"loss": loss}
+
+
 def should_save_checkpoint(config: _config.TrainConfig, completed_step: int) -> bool:
     if completed_step >= config.num_train_steps:
         return True
