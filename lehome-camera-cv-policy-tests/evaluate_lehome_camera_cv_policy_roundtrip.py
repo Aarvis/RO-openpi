@@ -71,6 +71,7 @@ def _summary(values: list[float]) -> dict[str, float]:
         "p95": float(np.percentile(arr, 95)),
         "p98": float(np.percentile(arr, 98)),
         "p99": float(np.percentile(arr, 99)),
+        "p99_5": float(np.percentile(arr, 99.5)),
         "p99_9": float(np.percentile(arr, 99.9)),
         "p99_99": float(np.percentile(arr, 99.99)),
         "max": float(np.max(arr)),
@@ -114,8 +115,9 @@ def _pose8_errors_deg_m(
     return pos_err_m, rot_err_deg
 
 
-def _find_episode_jsons(episodes_dir: Path, glob_pattern: str) -> list[Path]:
-    return sorted(p for p in episodes_dir.glob(glob_pattern) if p.is_file())
+def _find_episode_jsons(episodes_dir: Path, glob_pattern: str, *, recursive: bool) -> list[Path]:
+    iterator = episodes_dir.rglob(glob_pattern) if recursive else episodes_dir.glob(glob_pattern)
+    return sorted(p for p in iterator if p.is_file())
 
 
 def _parse_model_type(name: str):
@@ -154,8 +156,8 @@ def _evaluate_episode_worker(
         pose_quat_order=str(cfg["pose_quat_order"]),
     )
     output_tf = LehomeCameraCVOutputs(
-        model_action_dim=16,
-        output_action_dim=12,
+        model_action_dim=int(cfg["model_action_dim"]),
+        output_action_dim=int(cfg["output_action_dim"]),
         fk_json_path=str(cfg["fk_json"]),
         camera_config_json_path=str(cfg["camera_json"]),
         state_unit=str(cfg["state_unit"]),
@@ -290,41 +292,46 @@ def _evaluate_episode_worker(
 
 def main() -> None:
     script_path = Path(__file__)
+    _prepare_import_path(script_path)
     default_fk_json, default_camera_json = _resolve_default_policy_data_paths(script_path)
+    from openpi.training.config import LeRobotLehomeCameraCVDataConfig
+
+    data_cfg = LeRobotLehomeCameraCVDataConfig()
 
     parser = argparse.ArgumentParser(
         description="Evaluate LehomeCameraCVInputs/Outputs class roundtrip error on episode JSONs."
     )
     parser.add_argument("--episodes-dir", type=Path, required=True)
     parser.add_argument("--glob", type=str, default="episode_*.json")
+    parser.add_argument("--recursive", action="store_true", default=False)
     parser.add_argument("--state-key", type=str, default="observation.state")
     parser.add_argument("--action-key", type=str, default="action")
     parser.add_argument("--fk-json", type=Path, default=default_fk_json)
     parser.add_argument("--camera-json", type=Path, default=default_camera_json)
-    parser.add_argument("--state-unit", type=str, choices=["rad", "deg"], default="rad")
+    parser.add_argument("--state-unit", type=str, choices=["rad", "deg"], default=data_cfg.state_unit)
     parser.add_argument(
         "--dataset-joint-order",
         type=str,
-        default="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+        default=data_cfg.dataset_joint_order_csv,
     )
-    parser.add_argument("--pose-quat-order", type=str, choices=["wxyz", "xyzw"], default="wxyz")
+    parser.add_argument("--pose-quat-order", type=str, choices=["wxyz", "xyzw"], default=data_cfg.pose_quat_order)
     parser.add_argument("--model-type", type=str, default="pi05", help="pi0 | pi05 | pi0_fast")
-    parser.add_argument("--damping", type=float, default=0.05)
-    parser.add_argument("--alpha", type=float, default=1.0)
+    parser.add_argument("--damping", type=float, default=data_cfg.damping)
+    parser.add_argument("--alpha", type=float, default=data_cfg.alpha)
     parser.add_argument(
         "--line-search-alphas",
         type=str,
-        default="1,0.5,0.25,0.05,1.5,2",
+        default=data_cfg.line_search_alphas_csv,
         help="Comma-separated positive line-search multipliers.",
     )
-    parser.add_argument("--fallback-tol-factor", type=float, default=1.1)
-    parser.add_argument("--pos-weight", type=float, default=1.0)
-    parser.add_argument("--rot-weight", type=float, default=1.0)
-    parser.add_argument("--max-iters", type=int, default=80)
-    parser.add_argument("--tol-pos-m", type=float, default=1e-4)
-    parser.add_argument("--tol-rot-deg", type=float, default=0.2)
-    parser.add_argument("--max-step-norm", type=float, default=0.2)
-    parser.add_argument("--no-enforce-limits", action="store_true", default=False)
+    parser.add_argument("--fallback-tol-factor", type=float, default=data_cfg.fallback_tol_factor)
+    parser.add_argument("--pos-weight", type=float, default=data_cfg.pos_weight)
+    parser.add_argument("--rot-weight", type=float, default=data_cfg.rot_weight)
+    parser.add_argument("--max-iters", type=int, default=data_cfg.max_iters)
+    parser.add_argument("--tol-pos-m", type=float, default=data_cfg.tol_pos_m)
+    parser.add_argument("--tol-rot-deg", type=float, default=data_cfg.tol_rot_deg)
+    parser.add_argument("--max-step-norm", type=float, default=data_cfg.max_step_norm)
+    parser.add_argument("--no-enforce-limits", action="store_true", default=not data_cfg.enforce_limits)
     parser.add_argument("--workers", type=int, default=32, help="Episode-parallel workers. Use 1 for serial.")
     parser.add_argument("--max-episodes", type=int, default=0, help="0 means all episodes.")
     parser.add_argument(
@@ -334,8 +341,6 @@ def main() -> None:
     )
     parser.add_argument("--fail-fast", action="store_true", default=False)
     args = parser.parse_args()
-
-    _prepare_import_path(script_path)
 
     episodes_dir = args.episodes_dir.resolve()
     fk_json = args.fk_json.resolve()
@@ -347,7 +352,7 @@ def main() -> None:
     if not camera_json.exists():
         raise FileNotFoundError(f"Camera json not found: {camera_json}")
 
-    episode_paths = _find_episode_jsons(episodes_dir, args.glob)
+    episode_paths = _find_episode_jsons(episodes_dir, args.glob, recursive=bool(args.recursive))
     if args.max_episodes and args.max_episodes > 0:
         episode_paths = episode_paths[: args.max_episodes]
     if not episode_paths:
@@ -372,6 +377,8 @@ def main() -> None:
         "dataset_joint_order": str(args.dataset_joint_order),
         "pose_quat_order": str(args.pose_quat_order),
         "model_type": str(args.model_type),
+        "model_action_dim": int(data_cfg.action_dim),
+        "output_action_dim": int(data_cfg.output_action_dim),
         "damping": float(args.damping),
         "alpha": float(args.alpha),
         "line_search_alphas_csv": str(args.line_search_alphas),
@@ -471,6 +478,7 @@ def main() -> None:
         "metadata": {
             "episodes_dir": str(episodes_dir),
             "glob": args.glob,
+            "recursive": bool(args.recursive),
             "episodes_found": int(len(episode_paths)),
             "episodes_failed": int(episodes_failed),
             "workers": int(workers),
@@ -531,9 +539,16 @@ def main() -> None:
     g_rot = report["global_summary"]["ee_orientation_error_deg"]["all_arms"]
     if g_pos and g_rot:
         print(
-            "Global all-arms median/p99: "
-            f"pos_median={g_pos['median']:.6g}, pos_p99={g_pos['p99']:.6g}, "
-            f"rot_deg_median={g_rot['median']:.6g}, rot_deg_p99={g_rot['p99']:.6g}"
+            "Global all-arms position stats: "
+            f"min={g_pos['min']:.6g}, p5={g_pos['p5']:.6g}, median={g_pos['median']:.6g}, "
+            f"p99={g_pos['p99']:.6g}, p99.5={g_pos['p99_5']:.6g}, p99.9={g_pos['p99_9']:.6g}, "
+            f"max={g_pos['max']:.6g}"
+        )
+        print(
+            "Global all-arms orientation stats: "
+            f"min={g_rot['min']:.6g}, p5={g_rot['p5']:.6g}, median={g_rot['median']:.6g}, "
+            f"p99={g_rot['p99']:.6g}, p99.5={g_rot['p99_5']:.6g}, p99.9={g_rot['p99_9']:.6g}, "
+            f"max={g_rot['max']:.6g}"
         )
 
 

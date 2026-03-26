@@ -56,12 +56,23 @@ class MultiSampleWebsocketPolicyServer:
             try:
                 start_time = time.monotonic()
                 request = msgpack_numpy.unpackb(await websocket.recv())
-                action = self._handle_request(request)
+                action = await asyncio.to_thread(self._handle_request, request)
                 action["server_timing"] = {
                     "infer_ms": (time.monotonic() - start_time) * 1000,
                 }
                 if prev_total_time is not None:
                     action["server_timing"]["prev_total_ms"] = prev_total_time * 1000
+
+                policy_timing = action.get("policy_timing", {})
+                logger.info(
+                    "Completed request from %s total_ms=%.1f policy_ms=%s model_ms=%s output_ms=%s samples=%s",
+                    websocket.remote_address,
+                    action["server_timing"]["infer_ms"],
+                    _fmt_timing(policy_timing.get("infer_ms")),
+                    _fmt_timing(policy_timing.get("model_infer_ms")),
+                    _fmt_timing(policy_timing.get("output_transform_ms")),
+                    policy_timing.get("num_samples"),
+                )
 
                 await websocket.send(packer.pack(action))
                 prev_total_time = time.monotonic() - start_time
@@ -111,3 +122,12 @@ def _health_check(connection: _server.ServerConnection, request: _server.Request
     if request.path == "/healthz":
         return connection.respond(http.HTTPStatus.OK, "OK\n")
     return None
+
+
+def _fmt_timing(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.1f}"
+    except Exception:
+        return str(value)

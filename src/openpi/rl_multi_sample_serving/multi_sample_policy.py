@@ -61,11 +61,17 @@ class MultiSamplePolicy:
         if num_samples <= 0:
             raise ValueError(f"num_samples must be > 0, got {num_samples}")
 
+        total_start_time = time.monotonic()
+        preprocess_start_time = total_start_time
         inputs = jax.tree.map(lambda x: x, obs)
         inputs = self._policy._input_transform(inputs)
-        batched_inputs = self._repeat_inputs(inputs, num_samples)
+        input_transform_ms = (time.monotonic() - preprocess_start_time) * 1000
 
-        start_time = time.monotonic()
+        repeat_start_time = time.monotonic()
+        batched_inputs = self._repeat_inputs(inputs, num_samples)
+        repeat_inputs_ms = (time.monotonic() - repeat_start_time) * 1000
+
+        model_start_time = time.monotonic()
         if self._policy._is_pytorch_model:
             outputs = self._infer_many_pytorch(
                 batched_inputs,
@@ -80,11 +86,22 @@ class MultiSamplePolicy:
                 seed=seed,
                 noise=noise,
             )
+        model_infer_ms = (time.monotonic() - model_start_time) * 1000
 
+        output_transform_start_time = time.monotonic()
         transformed_outputs = self._apply_output_transform_per_sample(outputs)
+        output_transform_ms = (time.monotonic() - output_transform_start_time) * 1000
+        total_infer_ms = (time.monotonic() - total_start_time) * 1000
         transformed_outputs["policy_timing"] = {
-            "infer_ms": (time.monotonic() - start_time) * 1000,
+            "infer_ms": total_infer_ms,
+            "input_transform_ms": input_transform_ms,
+            "repeat_inputs_ms": repeat_inputs_ms,
+            "model_infer_ms": model_infer_ms,
+            "output_transform_ms": output_transform_ms,
             "num_samples": num_samples,
+            "backend": "pytorch" if self._policy._is_pytorch_model else "jax",
+            "has_explicit_noise": noise is not None,
+            "has_seed": seed is not None,
         }
         return transformed_outputs
 

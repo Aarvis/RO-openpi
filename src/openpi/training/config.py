@@ -91,6 +91,9 @@ class DataConfig:
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
+    # If true, the dataset already stores full action chunks per sample and the loader must not
+    # reconstruct them from future timesteps using delta_timestamps.
+    prechunked_actions: bool = False
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -434,13 +437,16 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
     dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
+    # damping: float = 0.05
     damping: float = 0.05
     alpha: float = 1.0
-    line_search_alphas_csv: str = "1,0.5,0.25,0.05,1.5,2"
+    # line_search_alphas_csv: str = "1,0.5,0.25,0.05,1.5,2"
+    line_search_alphas_csv: str = "1,0.5"
     fallback_tol_factor: float = 1.1
     pos_weight: float = 1.0
     rot_weight: float = 1.0
-    max_iters: int = 80
+    # max_iters: int = 80
+    max_iters: int = 20
     tol_pos_m: float = 1e-4
     tol_rot_deg: float = 0.2
     max_step_norm: float = 0.2
@@ -508,6 +514,100 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
             repack_transforms=repack_transform,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotLehomeCameraCVActionChunkedDataConfig(DataConfigFactory):
+    """
+    LeHome camera-CV data config for LeRobot datasets that already store full action chunks
+    per sample under `actions` with shape (T, 12).
+    """
+
+    use_delta_joint_actions: bool = False
+    action_dim: int = 16
+    output_action_dim: int = 12
+    state_unit: str = "rad"
+    pose_quat_order: str = "wxyz"
+    dataset_joint_order_csv: str = (
+        "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
+    )
+    damping: float = 0.05
+    alpha: float = 1.0
+    line_search_alphas_csv: str = "1,0.5"
+    fallback_tol_factor: float = 1.1
+    pos_weight: float = 1.0
+    rot_weight: float = 1.0
+    max_iters: int = 20
+    tol_pos_m: float = 1e-4
+    tol_rot_deg: float = 0.2
+    max_step_norm: float = 0.2
+    enforce_limits: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/top_rgb": "observation.images.top_rgb",
+                        "observation/left_rgb": "observation.images.left_rgb",
+                        "observation/right_rgb": "observation.images.right_rgb",
+                        "observation/state": "observation.state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                lehome_camera_cv_policy.LehomeCameraCVInputs(
+                    model_type=model_config.model_type,
+                    state_unit=self.state_unit,
+                    pose_quat_order=self.pose_quat_order,
+                    dataset_joint_order_csv=self.dataset_joint_order_csv,
+                )
+            ],
+            outputs=[
+                lehome_camera_cv_policy.LehomeCameraCVOutputs(
+                    model_action_dim=self.action_dim,
+                    output_action_dim=self.output_action_dim,
+                    state_unit=self.state_unit,
+                    pose_quat_order=self.pose_quat_order,
+                    dataset_joint_order_csv=self.dataset_joint_order_csv,
+                    damping=self.damping,
+                    alpha=self.alpha,
+                    line_search_alphas_csv=self.line_search_alphas_csv,
+                    fallback_tol_factor=self.fallback_tol_factor,
+                    pos_weight=self.pos_weight,
+                    rot_weight=self.rot_weight,
+                    max_iters=self.max_iters,
+                    tol_pos_m=self.tol_pos_m,
+                    tol_rot_deg=self.tol_rot_deg,
+                    max_step_norm=self.max_step_norm,
+                    enforce_limits=self.enforce_limits,
+                )
+            ],
+        )
+
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(5, -1, 5, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            prechunked_actions=True,
+            action_sequence_keys=(),
         )
 
 
@@ -976,6 +1076,35 @@ _CONFIGS = [
         # batch_size=64,
         # log_interval=50,
         # save_interval=670,
+    ),
+    TrainConfig(
+        # LeHome camera-CV variant for datasets that already store full action chunks per datapoint.
+        name="pi05_lehome_camera_cv_action_chunked_robot_finetune",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        num_workers=32,
+        data=LeRobotLehomeCameraCVActionChunkedDataConfig(
+            repo_id="local/lehome_action_chunked_sample",
+            base_config=DataConfig(prompt_from_task=True),
+            use_delta_joint_actions=False,
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+            dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=4200,
+            peak_lr=1e-4,
+            decay_steps=63000,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=63000,
+        batch_size=64,
+        log_interval=200,
+        save_steps=(8400, 20000, 40000),
+        keep_period=None,
+        max_to_keep=4,
     ),
     #
     # Fine-tuning Aloha configs.

@@ -356,11 +356,11 @@ python -m parallel_eval \
   --headless \
   --enable_cameras \
   --garment_type custom \
-  --num_episodes 20 \
-  --max_workers 2 \
-  --gpu_ids 0,1 \
+  --num_episodes 50 \
+  --max_workers 8 \
+  --gpu_ids 0,1,2,3,4,5,6,7 \
   --ramp_up_episode_gate 1 \
-  --worker_timeout_sec 14400 \
+  --worker_timeout_sec 28800 \
   --policy_type openpi_ws \
   --policy_base_ws_url ws://20.244.4.116 \
   --policy_start_port 8000 \
@@ -370,7 +370,9 @@ python -m parallel_eval \
   --device cpu \
   --record_episodes \
   --record_all_episodes \
-  --no-record_keep_frame_images
+  --no-record_keep_frame_images \
+  --use_random_seed
+
 
 uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000150.json
 

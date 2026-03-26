@@ -225,7 +225,11 @@ def _plot_joint_roundtrip(
 
 def _build_parser() -> argparse.ArgumentParser:
     script_path = Path(__file__)
+    prepare_import_path(script_path)
     default_fk_json, default_camera_json = resolve_default_policy_data_paths(script_path)
+    from openpi.training.config import LeRobotLehomeCameraCVDataConfig
+
+    data_cfg = LeRobotLehomeCameraCVDataConfig()
 
     parser = argparse.ArgumentParser(
         description=(
@@ -244,25 +248,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fk-json", type=Path, default=default_fk_json)
     parser.add_argument("--camera-json", type=Path, default=default_camera_json)
-    parser.add_argument("--state-unit", type=str, choices=["rad", "deg"], default="rad")
+    parser.add_argument("--state-unit", type=str, choices=["rad", "deg"], default=data_cfg.state_unit)
     parser.add_argument(
         "--dataset-joint-order",
         type=str,
-        default="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+        default=data_cfg.dataset_joint_order_csv,
     )
-    parser.add_argument("--pose-quat-order", type=str, choices=["wxyz", "xyzw"], default="wxyz")
+    parser.add_argument("--pose-quat-order", type=str, choices=["wxyz", "xyzw"], default=data_cfg.pose_quat_order)
     parser.add_argument("--model-type", type=str, default="pi05", help="pi0 | pi05 | pi0_fast")
-    parser.add_argument("--damping", type=float, default=0.05)
-    parser.add_argument("--alpha", type=float, default=1.0)
-    parser.add_argument("--line-search-alphas", type=str, default="1,0.5,0.25,0.05,1.5,2")
-    parser.add_argument("--fallback-tol-factor", type=float, default=1.1)
-    parser.add_argument("--pos-weight", type=float, default=1.0)
-    parser.add_argument("--rot-weight", type=float, default=1.0)
-    parser.add_argument("--max-iters", type=int, default=80)
-    parser.add_argument("--tol-pos-m", type=float, default=1e-4)
-    parser.add_argument("--tol-rot-deg", type=float, default=0.2)
-    parser.add_argument("--max-step-norm", type=float, default=0.2)
-    parser.add_argument("--no-enforce-limits", action="store_true", default=False)
+    parser.add_argument("--damping", type=float, default=data_cfg.damping)
+    parser.add_argument("--alpha", type=float, default=data_cfg.alpha)
+    parser.add_argument("--line-search-alphas", type=str, default=data_cfg.line_search_alphas_csv)
+    parser.add_argument("--fallback-tol-factor", type=float, default=data_cfg.fallback_tol_factor)
+    parser.add_argument("--pos-weight", type=float, default=data_cfg.pos_weight)
+    parser.add_argument("--rot-weight", type=float, default=data_cfg.rot_weight)
+    parser.add_argument("--max-iters", type=int, default=data_cfg.max_iters)
+    parser.add_argument("--tol-pos-m", type=float, default=data_cfg.tol_pos_m)
+    parser.add_argument("--tol-rot-deg", type=float, default=data_cfg.tol_rot_deg)
+    parser.add_argument("--max-step-norm", type=float, default=data_cfg.max_step_norm)
+    parser.add_argument("--no-enforce-limits", action="store_true", default=not data_cfg.enforce_limits)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument(
         "--out-dir",
@@ -286,6 +290,9 @@ def main() -> None:
 
     from openpi.policies.lehome_camera_cv_policy import LehomeCameraCVInputs
     from openpi.policies.lehome_camera_cv_policy import LehomeCameraCVOutputs
+    from openpi.training.config import LeRobotLehomeCameraCVDataConfig
+
+    data_cfg = LeRobotLehomeCameraCVDataConfig()
 
     episode_json = args.episode_json.resolve()
     if not episode_json.exists():
@@ -316,8 +323,8 @@ def main() -> None:
         pose_quat_order=str(args.pose_quat_order),
     )
     output_tf = LehomeCameraCVOutputs(
-        model_action_dim=16,
-        output_action_dim=12,
+        model_action_dim=int(data_cfg.action_dim),
+        output_action_dim=int(data_cfg.output_action_dim),
         fk_json_path=str(fk_json),
         camera_config_json_path=str(camera_json),
         state_unit=str(args.state_unit),
