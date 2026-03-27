@@ -44,9 +44,9 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
 
 ```bash
 uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
-  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/train_individual_garments_extracted \
   --json-glob "**/json/episode_*.json" \
-  --repo-name local/lehome_one_episode \
+  --repo-name local/lehome_train_episodes \
   --source-root .. \
   --overwrite \
   --workers 1
@@ -56,7 +56,7 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
 uv run examples/lehome/convert_all_episode_json_to_lerobot_weighted.py \
   --json-root /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports \
   --json-glob "**/json/episode_*.json" \
-  --repo-name local/lehome_all_episodes_weighted \
+  --repo-name local/lehome_train_episodes \
   --source-root .. \
   --overwrite \
   --workers 1
@@ -81,9 +81,12 @@ export OPENPI_DATA_HOME=/datadrive/cache/openpi
 export HF_HOME=/datadrive/cache/hf
 export HUGGINGFACE_HUB_CACHE=/datadrive/cache/hf/hub
 export HF_LEROBOT_HOME=/datadrive/hf_cache/lerobot
+
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
 ```
 
+
+export HUGGINGFACE_HUB_CACHE=/scratch/hf/lerobot
 
 Then:
 ```bash
