@@ -50,6 +50,9 @@ class DataLoader(Protocol[T_co]):
     def __iter__(self) -> Iterator[T_co]:
         raise NotImplementedError("Subclasses of DataLoader should implement __iter__.")
 
+    def __len__(self) -> int:
+        raise NotImplementedError("Subclasses of DataLoader should implement __len__.")
+
 
 class TransformedDataset(Dataset[T_co]):
     def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
@@ -548,6 +551,11 @@ class TorchDataLoader:
     def torch_loader(self) -> torch.utils.data.DataLoader:
         return self._data_loader
 
+    def __len__(self) -> int:
+        if self._num_batches is not None:
+            return self._num_batches
+        return len(self._data_loader)
+
     def __iter__(self):
         num_items = 0
         while True:
@@ -611,6 +619,11 @@ class RLDSDataLoader:
         self._sharding = sharding
         self._num_batches = num_batches
 
+    def __len__(self) -> int:
+        if self._num_batches is not None:
+            return self._num_batches
+        return len(self._dataset)
+
     def __iter__(self):
         num_items = 0
         while True:
@@ -637,3 +650,6 @@ class DataLoaderImpl(DataLoader):
     def __iter__(self):
         for batch in self._data_loader:
             yield _model.Observation.from_dict(batch), batch["actions"]
+
+    def __len__(self) -> int:
+        return len(self._data_loader)

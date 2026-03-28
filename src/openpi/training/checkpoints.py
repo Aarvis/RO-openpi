@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures as futures
 import dataclasses
+import json
 import logging
 from typing import Protocol
 
@@ -15,6 +16,31 @@ from openpi.shared import array_typing as at
 import openpi.shared.normalize as _normalize
 import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
+
+
+@dataclasses.dataclass(frozen=True)
+class BestCheckpointInfo:
+    step: int | None = None
+    val_loss: float | None = None
+
+
+def _create_checkpoint_manager(
+    checkpoint_dir: epath.Path, *, keep_period: int | None, max_to_keep: int | None
+) -> ocp.CheckpointManager:
+    return ocp.CheckpointManager(
+        checkpoint_dir,
+        item_handlers={
+            "assets": CallbackHandler(),
+            "train_state": ocp.PyTreeCheckpointHandler(),
+            "params": ocp.PyTreeCheckpointHandler(),
+        },
+        options=ocp.CheckpointManagerOptions(
+            max_to_keep=max_to_keep,
+            keep_period=keep_period,
+            create=False,
+            async_options=ocp.AsyncOptions(timeout_secs=7200),
+        ),
+    )
 
 
 def initialize_checkpoint_dir(
@@ -42,20 +68,7 @@ def initialize_checkpoint_dir(
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    mngr = ocp.CheckpointManager(
-        checkpoint_dir,
-        item_handlers={
-            "assets": CallbackHandler(),
-            "train_state": ocp.PyTreeCheckpointHandler(),
-            "params": ocp.PyTreeCheckpointHandler(),
-        },
-        options=ocp.CheckpointManagerOptions(
-            max_to_keep=max_to_keep,
-            keep_period=keep_period,
-            create=False,
-            async_options=ocp.AsyncOptions(timeout_secs=7200),
-        ),
-    )
+    mngr = _create_checkpoint_manager(checkpoint_dir, keep_period=keep_period, max_to_keep=max_to_keep)
 
     # Special case: the checkpoint directory exists and the user requests to resume training, but the training run did
     # not get to the first checkpoint saved. In this case, we don't actually want the train script to try and restore a
@@ -65,6 +78,79 @@ def initialize_checkpoint_dir(
         resuming = False
 
     return mngr, resuming
+
+
+def initialize_best_checkpoint_dir(
+    checkpoint_dir: epath.Path | str,
+    *,
+    overwrite: bool,
+    resume: bool,
+) -> tuple[ocp.CheckpointManager, bool, BestCheckpointInfo]:
+    checkpoint_dir = epath.Path(checkpoint_dir).resolve()
+    best_checkpoint_dir = checkpoint_dir / "best"
+    resuming = False
+    if checkpoint_dir.exists():
+        if overwrite:
+            checkpoint_dir.rmtree()
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            logging.info(f"Wiped checkpoint directory {checkpoint_dir}")
+        elif resume:
+            resuming = True
+        else:
+            raise FileExistsError(
+                f"Checkpoint directory {checkpoint_dir} already exists. Use --overwrite or --resume "
+                "to indicate how to handle it."
+            )
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    best_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    mngr = _create_checkpoint_manager(best_checkpoint_dir, keep_period=None, max_to_keep=1)
+    if resuming and tuple(mngr.all_steps()) == ():
+        logging.info("Best-checkpoint directory exists, but does not contain any checkpoints. Aborting resume.")
+        resuming = False
+
+    best_info = load_best_checkpoint_info(best_checkpoint_dir) if resuming else BestCheckpointInfo()
+    return mngr, resuming, best_info
+
+
+def initialize_val_checkpoint_dirs(
+    checkpoint_dir: epath.Path | str,
+    *,
+    overwrite: bool,
+    resume: bool,
+) -> tuple[ocp.CheckpointManager, ocp.CheckpointManager, bool, BestCheckpointInfo, BestCheckpointInfo]:
+    checkpoint_dir = epath.Path(checkpoint_dir).resolve()
+    best_checkpoint_dir = checkpoint_dir / "best"
+    latest_val_checkpoint_dir = checkpoint_dir / "latest_val"
+    resuming = False
+    if checkpoint_dir.exists():
+        if overwrite:
+            checkpoint_dir.rmtree()
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            logging.info(f"Wiped checkpoint directory {checkpoint_dir}")
+        elif resume:
+            resuming = True
+        else:
+            raise FileExistsError(
+                f"Checkpoint directory {checkpoint_dir} already exists. Use --overwrite or --resume "
+                "to indicate how to handle it."
+            )
+
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    best_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    latest_val_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    best_manager = _create_checkpoint_manager(best_checkpoint_dir, keep_period=None, max_to_keep=1)
+    latest_val_manager = _create_checkpoint_manager(latest_val_checkpoint_dir, keep_period=None, max_to_keep=1)
+
+    if resuming and tuple(best_manager.all_steps()) == () and tuple(latest_val_manager.all_steps()) == ():
+        logging.info("Validation-checkpoint directories exist, but contain no checkpoints. Aborting resume.")
+        resuming = False
+
+    best_info = load_best_checkpoint_info(best_checkpoint_dir) if resuming else BestCheckpointInfo()
+    latest_val_info = load_best_checkpoint_info(latest_val_checkpoint_dir) if resuming else BestCheckpointInfo()
+    return best_manager, latest_val_manager, resuming, best_info, latest_val_info
 
 
 def save_state(
@@ -89,6 +175,34 @@ def save_state(
         "params": {"params": params},
     }
     checkpoint_manager.save(step, items)
+
+
+def save_best_state(
+    checkpoint_manager: ocp.CheckpointManager,
+    best_checkpoint_dir: epath.Path | str,
+    state: training_utils.TrainState,
+    data_loader: _data_loader.DataLoader,
+    step: int,
+    val_loss: float,
+):
+    checkpoint_manager.wait_until_finished()
+    save_state(checkpoint_manager, state, data_loader, step)
+    checkpoint_manager.wait_until_finished()
+    _write_best_checkpoint_info(best_checkpoint_dir, BestCheckpointInfo(step=step, val_loss=val_loss))
+
+
+def save_latest_val_state(
+    checkpoint_manager: ocp.CheckpointManager,
+    latest_val_checkpoint_dir: epath.Path | str,
+    state: training_utils.TrainState,
+    data_loader: _data_loader.DataLoader,
+    step: int,
+    val_loss: float,
+):
+    checkpoint_manager.wait_until_finished()
+    save_state(checkpoint_manager, state, data_loader, step)
+    checkpoint_manager.wait_until_finished()
+    _write_best_checkpoint_info(latest_val_checkpoint_dir, BestCheckpointInfo(step=step, val_loss=val_loss))
 
 
 def restore_state(
@@ -119,6 +233,17 @@ def load_norm_stats(assets_dir: epath.Path | str, asset_id: str) -> dict[str, _n
     return norm_stats
 
 
+def load_best_checkpoint_info(best_checkpoint_dir: epath.Path | str) -> BestCheckpointInfo:
+    checkpoint_dir = epath.Path(best_checkpoint_dir)
+    metadata_path = checkpoint_dir / "checkpoint_info.json"
+    if not metadata_path.exists():
+        metadata_path = checkpoint_dir / "best_checkpoint.json"
+    if not metadata_path.exists():
+        return BestCheckpointInfo()
+    payload = json.loads(metadata_path.read_text())
+    return BestCheckpointInfo(step=payload.get("step"), val_loss=payload.get("val_loss"))
+
+
 class Callback(Protocol):
     def __call__(self, directory: epath.Path) -> None: ...
 
@@ -145,6 +270,13 @@ class CallbackSave(ocp.args.CheckpointArgs):
 
 @ocp.args.register_with_handler(CallbackHandler, for_restore=True)
 class CallbackRestore(ocp.args.CheckpointArgs): ...
+
+
+def _write_best_checkpoint_info(best_checkpoint_dir: epath.Path | str, info: BestCheckpointInfo) -> None:
+    best_checkpoint_dir = epath.Path(best_checkpoint_dir)
+    best_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    metadata_path = best_checkpoint_dir / "checkpoint_info.json"
+    metadata_path.write_text(json.dumps(dataclasses.asdict(info), indent=2))
 
 
 def _split_params(state: training_utils.TrainState) -> tuple[training_utils.TrainState, at.Params]:

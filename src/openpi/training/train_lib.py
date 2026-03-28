@@ -193,6 +193,8 @@ def eval_step(
 
 
 def should_save_checkpoint(config: _config.TrainConfig, completed_step: int) -> bool:
+    if config.checkpoint_strategy != "manual":
+        return False
     if completed_step >= config.num_train_steps:
         return True
     if config.save_steps:

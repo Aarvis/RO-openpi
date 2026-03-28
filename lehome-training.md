@@ -145,8 +145,11 @@ hf upload huggingaccounttest/pi05-all-lehome-dik-20K \
   . \
   --repo-type model
 
+hf upload huggingaccounttest/mid-16epoch-OF-run \
+  /workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_train_eval/latest_val/9000 \
+  . \
+  --repo-type model
   
-
 
 2) Run Eval
 

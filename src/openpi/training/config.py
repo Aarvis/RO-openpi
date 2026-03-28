@@ -776,6 +776,9 @@ class TrainConfig:
     val_frequency: int = 1000
     # Global validation batch size. If not provided, defaults to the training batch size.
     val_batch_size: int | None = None
+    # Strategy used for saving checkpoints. "manual" preserves the current step-based checkpointing,
+    # while "best_val" rewrites a single `best` checkpoint whenever validation loss improves.
+    checkpoint_strategy: Literal["manual", "best_val"] = "manual"
     # How often (in steps) to save checkpoints.
     save_interval: int = 1000
     # Explicit completed training steps to save checkpoints at. When non-empty, this overrides save_interval.
@@ -815,6 +818,16 @@ class TrainConfig:
         return (pathlib.Path(self.checkpoint_base_dir) / self.name / self.exp_name).resolve()
 
     @property
+    def best_checkpoint_dir(self) -> pathlib.Path:
+        """Get the directory for the single best-validation checkpoint."""
+        return (self.checkpoint_dir / "best").resolve()
+
+    @property
+    def latest_val_checkpoint_dir(self) -> pathlib.Path:
+        """Get the directory for the most recent validation checkpoint."""
+        return (self.checkpoint_dir / "latest_val").resolve()
+
+    @property
     def trainable_filter(self) -> nnx.filterlib.Filter:
         """Get the filter for the trainable parameters."""
         return nnx.All(nnx.Param, nnx.Not(self.freeze_filter))
@@ -828,6 +841,8 @@ class TrainConfig:
             raise ValueError("Cannot resume and overwrite at the same time.")
         if self.run_val and not self.val_repo_id:
             raise ValueError("--val_repo_id must be set when --run_val is true.")
+        if self.checkpoint_strategy == "best_val" and not self.run_val:
+            raise ValueError("--run_val must be true when --checkpoint_strategy is best_val.")
         if self.val_frequency <= 0:
             raise ValueError("--val_frequency must be greater than 0.")
         if self.val_batch_size is not None and self.val_batch_size <= 0:
@@ -1071,13 +1086,14 @@ _CONFIGS = [
         name="pi05_lehome_camera_cv_robot_finetune",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
-        run_val=False,
+        run_val=True,
+        checkpoint_strategy="best_val",
         val_repo_id="local/lehome_val_episodes",
         val_frequency=1000,
-        val_batch_size=64,
+        val_batch_size=400,
         data=LeRobotLehomeCameraCVDataConfig(
             # repo_id="local/lehome_train_episodes",
-            repo_id="local/lehome_all_episodes_weighted",
+            repo_id="local/lehome_train_episodes",
             base_config=DataConfig(prompt_from_task=True),
             use_delta_joint_actions=False,
             action_dim=16,
@@ -1087,16 +1103,16 @@ _CONFIGS = [
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=4200,
+            warmup_steps=600,
             peak_lr=1e-4,
-            decay_steps=63000,
+            decay_steps=14000,
             decay_lr=5e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=63000,
-        batch_size=64,
-        log_interval=200,
-        save_steps=(8400, 20000, 40000),
+        num_train_steps=14000,
+        batch_size=400,
+        log_interval=100,
+        save_steps=(100, 4000),
         keep_period=None,
         max_to_keep=4,
         # num_train_steps=1000,

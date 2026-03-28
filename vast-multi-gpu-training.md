@@ -1,3 +1,5 @@
+wand token: 86db3e27e1bed5224ebac6150d2b59c668eb8f76
+
 git clone --recurse-submodules https://github.com/Aarvis/lehome-openpi.git
 
 git submodule update --init --recursive
@@ -37,8 +39,8 @@ export HF_DATASETS_CACHE=/workspace/.hf_home/datasets
 export TMPDIR=/workspace/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
@@ -49,7 +51,7 @@ Download Dataset from HF
 mkdir -p "${HF_LEROBOT_HOME}/huggingaccounttest/lehome_train_episodes" && \
 hf download huggingaccounttest/lehome_train_episodes \
   --repo-type dataset \
-  --local-dir "${HF_LEROBOT_HOME}/local/huggingaccounttest/lehome_train_episodes"
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_train_episodes"
 
 hf download huggingaccounttest/lehome_val_episodes \
   --repo-type dataset \
@@ -59,7 +61,7 @@ Update Training Config for Policy
 
 compute norm_stats for training data
 
-uv run scripts/compute_norm_stats.py --config-name pi05_lehome_robot_finetune
+uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 
 
 uv run scripts/train.py \

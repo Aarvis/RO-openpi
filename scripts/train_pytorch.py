@@ -151,41 +151,13 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config)
     if not is_main:
         return
 
+    if config.checkpoint_strategy != "manual":
+        return
+
     # Only save if it's time to save or if it's the final step
     if (global_step % config.save_interval == 0 and global_step > 0) or global_step == config.num_train_steps - 1:
-        # Create temporary directory for atomic checkpoint saving
         final_ckpt_dir = config.checkpoint_dir / f"{global_step}"
-        tmp_ckpt_dir = config.checkpoint_dir / f"tmp_{global_step}"
-
-        # Remove any existing temp directory and create new one
-        if tmp_ckpt_dir.exists():
-            shutil.rmtree(tmp_ckpt_dir)
-        tmp_ckpt_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save model state using safetensors (handle shared tensors)
-        model_to_save = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
-        safetensors.torch.save_model(model_to_save, tmp_ckpt_dir / "model.safetensors")
-
-        # Save optimizer state using PyTorch format
-        torch.save(optimizer.state_dict(), tmp_ckpt_dir / "optimizer.pt")
-
-        # Save training metadata (avoid saving full config to prevent JAX/Flax compatibility issues)
-        metadata = {
-            "global_step": global_step,
-            "config": dataclasses.asdict(config),
-            "timestamp": time.time(),
-        }
-        torch.save(metadata, tmp_ckpt_dir / "metadata.pt")
-
-        # save norm stats
-        norm_stats = data_config.norm_stats
-        if norm_stats is not None and data_config.asset_id is not None:
-            _normalize.save(tmp_ckpt_dir / "assets" / data_config.asset_id, norm_stats)
-
-        # Atomically move temp directory to final location
-        if final_ckpt_dir.exists():
-            shutil.rmtree(final_ckpt_dir)
-        tmp_ckpt_dir.rename(final_ckpt_dir)
+        _save_checkpoint_dir(model, optimizer, global_step, config, data_config, final_ckpt_dir)
 
         logging.info(f"Saved checkpoint at step {global_step} -> {final_ckpt_dir}")
 
@@ -194,19 +166,79 @@ def save_checkpoint(model, optimizer, global_step, config, is_main, data_config)
             wandb.log({"checkpoint_step": global_step}, step=global_step)
 
 
-def load_checkpoint(model, optimizer, checkpoint_dir, device):
-    """Load the latest checkpoint and return the global step."""
-    checkpoint_steps = [
-        int(d.name)
-        for d in checkpoint_dir.iterdir()
-        if d.is_dir() and d.name.isdigit() and not d.name.startswith("tmp_")
-    ]
+def save_best_checkpoint(model, optimizer, global_step, val_loss, config, is_main, data_config):
+    """Rewrite the single best checkpoint whenever validation loss improves."""
+    if not is_main:
+        return
 
-    if not checkpoint_steps:
-        raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
+    _save_checkpoint_dir(
+        model,
+        optimizer,
+        global_step,
+        config,
+        data_config,
+        config.best_checkpoint_dir,
+        val_loss=val_loss,
+    )
 
-    latest_step = max(checkpoint_steps)
-    ckpt_dir = checkpoint_dir / f"{latest_step}"
+    logging.info("Updated best checkpoint at step %d (val_loss=%.4f) -> %s", global_step, val_loss, config.best_checkpoint_dir)
+    if config.wandb_enabled:
+        wandb.log({"best_checkpoint_step": global_step, "best_checkpoint_val_loss": val_loss}, step=global_step)
+
+
+def save_latest_val_checkpoint(model, optimizer, global_step, val_loss, config, is_main, data_config):
+    """Rewrite the single latest-validation checkpoint on every validation run."""
+    if not is_main:
+        return
+
+    _save_checkpoint_dir(
+        model,
+        optimizer,
+        global_step,
+        config,
+        data_config,
+        config.latest_val_checkpoint_dir,
+        val_loss=val_loss,
+    )
+
+    logging.info(
+        "Updated latest validation checkpoint at step %d (val_loss=%.4f) -> %s",
+        global_step,
+        val_loss,
+        config.latest_val_checkpoint_dir,
+    )
+    if config.wandb_enabled:
+        wandb.log({"latest_val_checkpoint_step": global_step, "latest_val_checkpoint_loss": val_loss}, step=global_step)
+
+
+def load_checkpoint(model, optimizer, checkpoint_dir, device, *, checkpoint_strategy="manual"):
+    """Load the latest checkpoint and return the global step and best validation loss if available."""
+    if checkpoint_strategy == "best_val":
+        latest_val_dir = checkpoint_dir / "latest_val"
+        best_dir = checkpoint_dir / "best"
+        if latest_val_dir.exists() and (latest_val_dir / "metadata.pt").exists():
+            ckpt_dir = latest_val_dir
+        elif best_dir.exists() and (best_dir / "metadata.pt").exists():
+            ckpt_dir = best_dir
+        else:
+            raise FileNotFoundError(f"No best or latest validation checkpoint found in {checkpoint_dir}")
+        metadata = torch.load(ckpt_dir / "metadata.pt", map_location=device, weights_only=False)
+        latest_step = metadata.get("global_step", 0)
+        best_val_loss = None
+        del metadata
+    else:
+        checkpoint_steps = [
+            int(d.name)
+            for d in checkpoint_dir.iterdir()
+            if d.is_dir() and d.name.isdigit() and not d.name.startswith("tmp_")
+        ]
+
+        if not checkpoint_steps:
+            raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
+
+        latest_step = max(checkpoint_steps)
+        ckpt_dir = checkpoint_dir / f"{latest_step}"
+        best_val_loss = None
 
     # Clear memory before loading checkpoints
     if torch.cuda.is_available():
@@ -250,13 +282,14 @@ def load_checkpoint(model, optimizer, checkpoint_dir, device):
         logging.info("Loading metadata...")
         metadata = torch.load(ckpt_dir / "metadata.pt", map_location=device, weights_only=False)
         global_step = metadata.get("global_step", latest_step)
+        best_val_loss = metadata.get("val_loss", best_val_loss)
         del metadata
         torch.cuda.empty_cache()
         gc.collect()
         log_memory_usage(device, latest_step, "after_loading_metadata")
 
         logging.info(f"Successfully loaded all checkpoint components from step {latest_step}")
-        return global_step
+        return global_step, best_val_loss
 
     except RuntimeError as e:
         if "out of memory" in str(e):
@@ -279,6 +312,42 @@ def get_latest_checkpoint_step(checkpoint_dir):
         if d.is_dir() and d.name.isdigit() and not d.name.startswith("tmp_")
     ]
     return max(checkpoint_steps) if checkpoint_steps else None
+
+
+def _save_checkpoint_dir(model, optimizer, global_step, config, data_config, final_ckpt_dir, *, val_loss=None):
+    tmp_ckpt_dir = final_ckpt_dir.parent / f"tmp_{final_ckpt_dir.name}"
+
+    if tmp_ckpt_dir.exists():
+        shutil.rmtree(tmp_ckpt_dir)
+    tmp_ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    model_to_save = model.module if isinstance(model, torch.nn.parallel.DistributedDataParallel) else model
+    safetensors.torch.save_model(model_to_save, tmp_ckpt_dir / "model.safetensors")
+
+    torch.save(optimizer.state_dict(), tmp_ckpt_dir / "optimizer.pt")
+
+    metadata = {
+        "global_step": global_step,
+        "config": dataclasses.asdict(config),
+        "timestamp": time.time(),
+        "val_loss": val_loss,
+    }
+    torch.save(metadata, tmp_ckpt_dir / "metadata.pt")
+
+    norm_stats = data_config.norm_stats
+    if norm_stats is not None and data_config.asset_id is not None:
+        _normalize.save(tmp_ckpt_dir / "assets" / data_config.asset_id, norm_stats)
+
+    if final_ckpt_dir.exists():
+        shutil.rmtree(final_ckpt_dir)
+    tmp_ckpt_dir.rename(final_ckpt_dir)
+
+
+def _load_checkpoint_metadata(checkpoint_dir, device):
+    metadata_path = checkpoint_dir / "metadata.pt"
+    if not metadata_path.exists():
+        return None
+    return torch.load(metadata_path, map_location=device, weights_only=False)
 
 
 def log_memory_usage(device, step, phase="unknown"):
@@ -306,15 +375,24 @@ def log_memory_usage(device, step, phase="unknown"):
     )
 
 
-def run_validation(model, val_loader, device, *, use_ddp: bool):
+def run_validation(model, val_loader, device, *, use_ddp: bool, step: int, show_progress: bool):
     was_training = model.training
     model.eval()
 
     local_loss_sum = 0.0
     local_batches = 0
 
+    val_iterator = tqdm.tqdm(
+        val_loader,
+        total=len(val_loader),
+        desc=f"Validation @ step {step}",
+        dynamic_ncols=True,
+        leave=False,
+        disable=not show_progress,
+    )
+
     with torch.no_grad():
-        for observation, actions in val_loader:
+        for observation, actions in val_iterator:
             observation = jax.tree.map(lambda x: x.to(device), observation)
             actions = actions.to(torch.float32)
             actions = actions.to(device)
@@ -354,20 +432,35 @@ def train_loop(config: _config.TrainConfig):
     set_seed(config.seed, local_rank)
 
     # Initialize checkpoint directory and wandb
+    best_val_loss = float("inf")
     resuming = False
     if config.resume:
         # Find checkpoint directory based on experiment name
         exp_checkpoint_dir = config.checkpoint_dir
         if exp_checkpoint_dir.exists():
-            # Use validation to find the latest working checkpoint
-            latest_step = get_latest_checkpoint_step(exp_checkpoint_dir)
-            if latest_step is not None:
-                resuming = True
-                logging.info(
-                    f"Resuming from experiment checkpoint directory: {exp_checkpoint_dir} at step {latest_step}"
-                )
+            if config.checkpoint_strategy == "best_val":
+                latest_val_metadata = _load_checkpoint_metadata(config.latest_val_checkpoint_dir, device)
+                best_metadata = _load_checkpoint_metadata(config.best_checkpoint_dir, device)
+                if latest_val_metadata is not None or best_metadata is not None:
+                    resuming = True
+                    if latest_val_metadata is not None:
+                        logging.info(f"Resuming from latest validation checkpoint directory: {config.latest_val_checkpoint_dir}")
+                    else:
+                        logging.info(f"Resuming from best checkpoint directory: {config.best_checkpoint_dir}")
+                    if best_metadata is not None and best_metadata.get("val_loss") is not None:
+                        best_val_loss = float(best_metadata["val_loss"])
+                else:
+                    raise FileNotFoundError(f"No best or latest validation checkpoint found in {exp_checkpoint_dir} for resume")
             else:
-                raise FileNotFoundError(f"No valid checkpoints found in {exp_checkpoint_dir} for resume")
+                # Use validation to find the latest working checkpoint
+                latest_step = get_latest_checkpoint_step(exp_checkpoint_dir)
+                if latest_step is not None:
+                    resuming = True
+                    logging.info(
+                        f"Resuming from experiment checkpoint directory: {exp_checkpoint_dir} at step {latest_step}"
+                    )
+                else:
+                    raise FileNotFoundError(f"No valid checkpoints found in {exp_checkpoint_dir} for resume")
         else:
             raise FileNotFoundError(f"Experiment checkpoint directory {exp_checkpoint_dir} does not exist for resume")
     elif config.overwrite and config.checkpoint_dir.exists():
@@ -515,7 +608,15 @@ def train_loop(config: _config.TrainConfig):
     # Load checkpoint if resuming
     global_step = 0
     if resuming:
-        global_step = load_checkpoint(model, optim, config.checkpoint_dir, device)
+        global_step, resumed_best_val_loss = load_checkpoint(
+            model,
+            optim,
+            config.checkpoint_dir,
+            device,
+            checkpoint_strategy=config.checkpoint_strategy,
+        )
+        if resumed_best_val_loss is not None:
+            best_val_loss = float(resumed_best_val_loss)
         logging.info(f"Resumed training from step {global_step}")
 
     def lr_schedule(step: int):
@@ -651,7 +752,7 @@ def train_loop(config: _config.TrainConfig):
 
             global_step += 1
             if val_loader is not None and global_step % config.val_frequency == 0:
-                val_info = run_validation(model, val_loader, device, use_ddp=use_ddp)
+                val_info = run_validation(model, val_loader, device, use_ddp=use_ddp, step=global_step, show_progress=is_main)
                 if is_main:
                     logging.info(
                         "step=%d val_loss=%.4f val_batches=%d",
@@ -667,6 +768,11 @@ def train_loop(config: _config.TrainConfig):
                             },
                             step=global_step,
                         )
+                    if config.checkpoint_strategy == "best_val":
+                        save_latest_val_checkpoint(model, optim, global_step, val_info["loss"], config, is_main, data_config)
+                    if config.checkpoint_strategy == "best_val" and val_info["loss"] < best_val_loss:
+                        save_best_checkpoint(model, optim, global_step, val_info["loss"], config, is_main, data_config)
+                        best_val_loss = val_info["loss"]
             # Save checkpoint using the new mechanism
             save_checkpoint(model, optim, global_step, config, is_main, data_config)
 
