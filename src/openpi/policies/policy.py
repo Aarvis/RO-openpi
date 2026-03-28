@@ -59,9 +59,16 @@ class Policy(BasePolicy):
             self._model = self._model.to(pytorch_device)
             self._model.eval()
             self._sample_actions = model.sample_actions
+            self._sample_actions_with_policy_latent = getattr(model, "sample_actions_with_policy_latent", None)
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
+            sample_actions_with_policy_latent = getattr(model, "sample_actions_with_policy_latent", None)
+            self._sample_actions_with_policy_latent = (
+                nnx_utils.module_jit(sample_actions_with_policy_latent)
+                if sample_actions_with_policy_latent is not None
+                else None
+            )
             self._rng = rng or jax.random.key(0)
 
     @override
@@ -80,6 +87,7 @@ class Policy(BasePolicy):
 
         # Prepare kwargs for sample_actions
         sample_kwargs = dict(self._sample_kwargs)
+        return_policy_latent = bool(sample_kwargs.pop("return_policy_latent", False))
         if noise is not None:
             noise = torch.from_numpy(noise).to(self._pytorch_device) if self._is_pytorch_model else jnp.asarray(noise)
 
@@ -89,10 +97,18 @@ class Policy(BasePolicy):
 
         observation = _model.Observation.from_dict(inputs)
         start_time = time.monotonic()
-        outputs = {
-            "state": inputs["state"],
-            "actions": self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs),
-        }
+        outputs = {"state": inputs["state"]}
+        if return_policy_latent:
+            if self._sample_actions_with_policy_latent is None:
+                raise ValueError("This policy/model does not support returning policy_latent.")
+            sampled_outputs = self._sample_actions_with_policy_latent(
+                sample_rng_or_pytorch_device,
+                observation,
+                **sample_kwargs,
+            )
+            outputs.update(sampled_outputs)
+        else:
+            outputs["actions"] = self._sample_actions(sample_rng_or_pytorch_device, observation, **sample_kwargs)
         if "state_joint" in inputs:
             outputs["state_joint"] = inputs["state_joint"]
         model_time = time.monotonic() - start_time

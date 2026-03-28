@@ -11,6 +11,13 @@ To start a remote policy server, you can simply run the following command:
 uv run scripts/serve_policy.py --env=[DROID | ALOHA | LIBERO]
 ```
 
+If you want the server to also return the action-chunk policy latent (`suffix_out[:, -H:, :]`) together with
+the action chunk, add:
+
+```bash
+uv run scripts/serve_policy.py --env=DROID --send-policy-latent
+```
+
 The `env` argument specifies which $\pi_0$ checkpoint should be loaded. Under the hood, this script will execute a command like the following, which you can use to start a policy server, e.g. for checkpoints you trained yourself (here an example for the DROID environment):
 
 ```bash

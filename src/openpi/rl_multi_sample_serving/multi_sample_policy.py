@@ -169,8 +169,15 @@ class MultiSamplePolicy:
 
         outputs = {
             "state": inputs["state"],
-            "actions": self._policy._sample_actions(sample_rng, observation, **sample_kwargs),
         }
+        return_policy_latent = bool(sample_kwargs.pop("return_policy_latent", False))
+        if return_policy_latent:
+            sample_actions_with_policy_latent = getattr(self._policy, "_sample_actions_with_policy_latent", None)
+            if sample_actions_with_policy_latent is None:
+                raise ValueError("Wrapped policy does not support returning policy_latent.")
+            outputs.update(sample_actions_with_policy_latent(sample_rng, observation, **sample_kwargs))
+        else:
+            outputs["actions"] = self._policy._sample_actions(sample_rng, observation, **sample_kwargs)
         if "state_joint" in inputs:
             outputs["state_joint"] = inputs["state_joint"]
         return jax.tree.map(np.asarray, outputs)
@@ -209,8 +216,15 @@ class MultiSamplePolicy:
 
         outputs = {
             "state": inputs["state"],
-            "actions": self._policy._sample_actions(device, observation, **sample_kwargs),
         }
+        return_policy_latent = bool(sample_kwargs.pop("return_policy_latent", False))
+        if return_policy_latent:
+            sample_actions_with_policy_latent = getattr(self._policy, "_sample_actions_with_policy_latent", None)
+            if sample_actions_with_policy_latent is None:
+                raise ValueError("Wrapped policy does not support returning policy_latent.")
+            outputs.update(sample_actions_with_policy_latent(device, observation, **sample_kwargs))
+        else:
+            outputs["actions"] = self._policy._sample_actions(device, observation, **sample_kwargs)
         if "state_joint" in inputs:
             outputs["state_joint"] = inputs["state_joint"]
         return jax.tree.map(lambda x: np.asarray(x.detach().cpu()), outputs)

@@ -53,6 +53,7 @@ class Args:
     worker_mode: bool = False
     worker_index: int = 0
     worker_log_path: str | None = None
+    send_policy_latent: bool = False
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
 
@@ -77,6 +78,7 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
 
 
 def create_multi_sample_policy(args: Args):
+    sample_kwargs = {"return_policy_latent": True} if args.send_policy_latent else None
     match args.policy:
         case Checkpoint():
             train_config = _config.get_config(args.policy.config)
@@ -84,6 +86,7 @@ def create_multi_sample_policy(args: Args):
                 train_config,
                 args.policy.dir,
                 default_prompt=args.default_prompt,
+                sample_kwargs=sample_kwargs,
             )
         case Default():
             checkpoint = DEFAULT_CHECKPOINT.get(args.env)
@@ -94,6 +97,7 @@ def create_multi_sample_policy(args: Args):
                 train_config,
                 checkpoint.dir,
                 default_prompt=args.default_prompt,
+                sample_kwargs=sample_kwargs,
             )
     raise ValueError(f"Unsupported policy args: {args.policy}")
 
@@ -183,6 +187,8 @@ def _build_worker_cmd(args: Args, *, script_path: Path, port: int, worker_index:
     ]
     if args.default_prompt is not None:
         cmd.extend(["--default-prompt", args.default_prompt])
+    if args.send_policy_latent:
+        cmd.append("--send-policy-latent")
     match args.policy:
         case Checkpoint():
             cmd.extend(

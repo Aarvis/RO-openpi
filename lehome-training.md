@@ -42,6 +42,23 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --workers 1
 ```
 
+uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
+  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/train_all_garment_individual_extracted \
+  --json-glob "**/json/episode_*.json" \
+  --repo-name local/lehome_all_episodes_train \
+  --source-root .. \
+  --overwrite \
+  --workers 1
+
+hf upload huggingaccounttest/lehome_train_episodes \
+  "/datadrive/hf_cache/lerobot/local/lehome_train_episodes" \
+  . \
+  --repo-type dataset && \
+hf repos settings huggingaccounttest/lehome_train_episodes \
+  --repo-type dataset \
+  --gated manual
+
+
 ```bash
 uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --json-root /datadrive/LEHOME/lehome-challenge/Datasets/train_individual_garments_extracted \
@@ -85,6 +102,33 @@ export HF_LEROBOT_HOME=/datadrive/hf_cache/lerobot
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
 ```
 
+```bash
+mkdir -p /workspace/cache/openpi
+export OPENPI_DATA_HOME=/workspace/cache/openpi
+export HF_HOME=/workspace/.hf_home
+export HUGGINGFACE_HUB_CACHE=/workspace/.hf_home/hub
+export HF_LEROBOT_HOME=/workspace/.hf_home/lerobot
+unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p /workspace/tmp
+export HF_DATASETS_CACHE=/workspace/.hf_home/datasets
+export TMPDIR=/workspace/tmp
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0,1
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+uv run scripts/train.py \
+  pi05_lehome_camera_cv_robot_finetune\
+  --exp-name lehome_train_eval \
+  --overwrite \
+  --fsdp-devices 1
+```
+
 
 export HUGGINGFACE_HUB_CACHE=/scratch/hf/lerobot
 
@@ -98,6 +142,8 @@ uv run scripts/compute_norm_stats.py --config-name pi05_lehome_robot_finetune
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_robot_finetune --exp-name=my_lehome_run --overwrite
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_lehome_camera_cv_robot_finetune --exp-name=one_episode_run --overwrite
+
+
 
 tmux show -g mouse
 tmux set -g mouse on
@@ -362,11 +408,11 @@ python -m parallel_eval \
   --headless \
   --enable_cameras \
   --garment_type custom \
-  --num_episodes 50 \
+  --num_episodes 5 \
   --max_workers 8 \
   --gpu_ids 0,1,2,3,4,5,6,7 \
   --ramp_up_episode_gate 1 \
-  --worker_timeout_sec 28800 \
+  --worker_timeout_sec 86400 \
   --policy_type openpi_ws \
   --policy_base_ws_url ws://20.244.4.116 \
   --policy_start_port 8000 \
@@ -377,6 +423,9 @@ python -m parallel_eval \
   --record_episodes \
   --record_all_episodes \
   --no-record_keep_frame_images \
+  --record_inbuilt_step_rewards
+  
+  
   --use_random_seed
 
 
