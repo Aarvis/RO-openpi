@@ -21,6 +21,19 @@ from openpi.shared import nnx_utils
 BasePolicy: TypeAlias = _base_policy.BasePolicy
 
 
+def _cast_msgpack_compatible(tree):
+    """Cast array leaves unsupported by msgpack serialization to safe dtypes."""
+
+    def _cast_leaf(x):
+        if not isinstance(x, np.ndarray):
+            return x
+        if x.dtype.kind == "V" or str(x.dtype) == "bfloat16":
+            return x.astype(np.float32)
+        return x
+
+    return jax.tree.map(_cast_leaf, tree)
+
+
 class Policy(BasePolicy):
     def __init__(
         self,
@@ -118,6 +131,7 @@ class Policy(BasePolicy):
             outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
 
         outputs = self._output_transform(outputs)
+        outputs = _cast_msgpack_compatible(outputs)
         outputs["policy_timing"] = {
             "infer_ms": model_time * 1000,
         }

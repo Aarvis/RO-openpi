@@ -328,4 +328,6 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
             # Roll the IK result forward for the next horizon step.
             q_cur = q_hat.copy()
 
-        return {"actions": np.asarray(out_actions, dtype=np.float32)}
+        result = dict(data)
+        result["actions"] = np.asarray(out_actions, dtype=np.float32)
+        return result

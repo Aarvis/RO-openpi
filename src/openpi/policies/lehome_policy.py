@@ -71,5 +71,6 @@ class LehomeOutputs(transforms.DataTransformFn):
     action_dim: int = 12
 
     def __call__(self, data: dict) -> dict:
-        return {"actions": np.asarray(data["actions"][:, : self.action_dim])}
-
+        result = dict(data)
+        result["actions"] = np.asarray(data["actions"][:, : self.action_dim])
+        return result

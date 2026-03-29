@@ -423,7 +423,8 @@ python -m parallel_eval \
   --record_episodes \
   --record_all_episodes \
   --no-record_keep_frame_images \
-  --record_inbuilt_step_rewards
+  --record_inbuilt_step_rewards \
+  --record_policy_latent
   
   
   --use_random_seed

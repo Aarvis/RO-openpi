@@ -1,5 +1,6 @@
 import asyncio
 import http
+import inspect
 import logging
 import time
 import traceback
@@ -35,13 +36,24 @@ class WebsocketPolicyServer:
         asyncio.run(self.run())
 
     async def run(self):
+        serve_kwargs = {
+            "compression": None,
+            "max_size": None,
+            "process_request": _health_check,
+        }
+        try:
+            serve_params = inspect.signature(_server.serve).parameters
+        except (TypeError, ValueError):
+            serve_params = {}
+        if "ping_interval" in serve_params:
+            serve_kwargs["ping_interval"] = None
+        if "ping_timeout" in serve_params:
+            serve_kwargs["ping_timeout"] = None
         async with _server.serve(
             self._handler,
             self._host,
             self._port,
-            compression=None,
-            max_size=None,
-            process_request=_health_check,
+            **serve_kwargs,
         ) as server:
             await server.serve_forever()
 
