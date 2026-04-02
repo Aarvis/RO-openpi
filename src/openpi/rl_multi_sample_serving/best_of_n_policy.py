@@ -23,6 +23,22 @@ def _select_sample(tree: dict[str, Any], index: int) -> dict[str, Any]:
     return selected
 
 
+def _cast_msgpack_compatible(tree: dict[str, Any]) -> dict[str, Any]:
+    def _cast_leaf(x: Any):
+        if not isinstance(x, np.ndarray):
+            return x
+        if x.dtype.kind == "V" or str(x.dtype) == "bfloat16":
+            return x.astype(np.float32)
+        return x
+
+    return {
+        key: _cast_msgpack_compatible(value)
+        if isinstance(value, dict)
+        else _cast_leaf(value)
+        for key, value in tree.items()
+    }
+
+
 class BestOfNSamplePolicy:
     def __init__(
         self,
@@ -30,13 +46,17 @@ class BestOfNSamplePolicy:
         policy: MultiSamplePolicy,
         critic_client: CriticScoreClient,
         num_samples: int,
+        noise_scale: float = 1.0,
         send_policy_latent: bool = False,
     ) -> None:
         if num_samples <= 0:
             raise ValueError(f"num_samples must be > 0, got {num_samples}")
+        if noise_scale <= 0:
+            raise ValueError(f"noise_scale must be > 0, got {noise_scale}")
         self._policy = policy
         self._critic_client = critic_client
         self._num_samples = int(num_samples)
+        self._noise_scale = float(noise_scale)
         self._send_policy_latent = bool(send_policy_latent)
 
     @property
@@ -44,13 +64,20 @@ class BestOfNSamplePolicy:
         metadata = dict(self._policy.metadata)
         metadata["best_of_n_enabled"] = True
         metadata["best_of_n_num_samples"] = self._num_samples
+        metadata["best_of_n_noise_scale"] = self._noise_scale
         metadata["critic_reranking"] = True
         return metadata
 
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
         total_start_time = time.monotonic()
         request_seed = int(secrets.randbelow(2**31 - 1) + 1)
-        sampled = self._policy.infer_many(obs, num_samples=self._num_samples, seed=request_seed)
+        noise = self._sample_noise(request_seed)
+        sampled = self._policy.infer_many(
+            obs,
+            num_samples=self._num_samples,
+            seed=request_seed,
+            noise=noise,
+        )
         if "policy_latent" not in sampled:
             raise KeyError(
                 "Multi-sample policy response is missing policy_latent. "
@@ -80,6 +107,7 @@ class BestOfNSamplePolicy:
             {
                 "seed": request_seed,
                 "num_samples": self._num_samples,
+                "noise_scale": self._noise_scale,
                 "selected_sample_index": best_index,
                 "selected_estimated_return": float(scores[best_index]),
                 "total_ms": (time.monotonic() - total_start_time) * 1000.0,
@@ -89,7 +117,18 @@ class BestOfNSamplePolicy:
         if isinstance(critic_timing, dict):
             policy_timing["critic_ms"] = critic_timing.get("infer_ms")
         best["policy_timing"] = policy_timing
-        return best
+        return _cast_msgpack_compatible(best)
+
+    def _sample_noise(self, seed: int) -> np.ndarray:
+        action_horizon, action_dim = self._policy.action_shape
+        rng = np.random.default_rng(seed)
+        noise = rng.standard_normal(
+            (self._num_samples, action_horizon, action_dim),
+            dtype=np.float32,
+        )
+        if self._noise_scale != 1.0:
+            noise = noise * np.float32(self._noise_scale)
+        return noise
 
     def _extract_critic_state(self, obs: dict[str, Any], num_samples: int) -> np.ndarray:
         if "observation/state" in obs:

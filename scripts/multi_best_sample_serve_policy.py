@@ -65,6 +65,7 @@ class Args:
     critic_log_path: str | None = None
     send_policy_latent: bool = False
     num_samples: int = 8
+    noise_scale: float = 1.0
     critic_port: int = 7998
     critic_host: str = "127.0.0.1"
     critic_checkpoint: str = ""
@@ -155,6 +156,7 @@ def _create_best_of_n_policy(args: Args):
         policy=multi_sample_policy,
         critic_client=critic_client,
         num_samples=args.num_samples,
+        noise_scale=args.noise_scale,
         send_policy_latent=args.send_policy_latent,
     )
 
@@ -276,6 +278,8 @@ def _build_policy_worker_cmd(
         args.critic_amp_dtype,
         "--num-samples",
         str(args.num_samples),
+        "--noise-scale",
+        str(args.noise_scale),
         "--log-dir",
         args.log_dir,
         "--worker-log-path",
@@ -390,6 +394,7 @@ def _run_launcher(args: Args) -> None:
         "critic_port": args.critic_port,
         "critic_checkpoint": str(Path(args.critic_checkpoint).resolve()),
         "num_samples": args.num_samples,
+        "noise_scale": args.noise_scale,
         "xla_preallocate": args.xla_preallocate,
         "stagger_seconds": args.stagger_seconds,
         "workers": [],

@@ -47,6 +47,10 @@ class MultiSamplePolicy:
         metadata["multi_sample_protocol_version"] = 1
         return metadata
 
+    @property
+    def action_shape(self) -> tuple[int, int]:
+        return self._get_action_shape()
+
     def infer(self, obs: dict[str, Any]) -> dict[str, Any]:
         return self._policy.infer(obs)
 
