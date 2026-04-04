@@ -62,6 +62,34 @@ class MultiSamplePolicy:
         seed: int | None = None,
         noise: np.ndarray | None = None,
     ) -> dict[str, Any]:
+        raw_outputs, timing = self.infer_many_raw(
+            obs,
+            num_samples=num_samples,
+            seed=seed,
+            noise=noise,
+        )
+        output_transform_start_time = time.monotonic()
+        transformed_outputs = self._apply_output_transform_per_sample(raw_outputs)
+        output_transform_ms = (time.monotonic() - output_transform_start_time) * 1000
+        policy_timing = dict(timing)
+        policy_timing["output_transform_ms"] = output_transform_ms
+        policy_timing["infer_ms"] = (
+            float(policy_timing.get("input_transform_ms", 0.0))
+            + float(policy_timing.get("repeat_inputs_ms", 0.0))
+            + float(policy_timing.get("model_infer_ms", 0.0))
+            + output_transform_ms
+        )
+        transformed_outputs["policy_timing"] = policy_timing
+        return transformed_outputs
+
+    def infer_many_raw(
+        self,
+        obs: dict[str, Any],
+        *,
+        num_samples: int,
+        seed: int | None = None,
+        noise: np.ndarray | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         if num_samples <= 0:
             raise ValueError(f"num_samples must be > 0, got {num_samples}")
 
@@ -92,22 +120,19 @@ class MultiSamplePolicy:
             )
         model_infer_ms = (time.monotonic() - model_start_time) * 1000
 
-        output_transform_start_time = time.monotonic()
-        transformed_outputs = self._apply_output_transform_per_sample(outputs)
-        output_transform_ms = (time.monotonic() - output_transform_start_time) * 1000
         total_infer_ms = (time.monotonic() - total_start_time) * 1000
-        transformed_outputs["policy_timing"] = {
+        timing = {
             "infer_ms": total_infer_ms,
             "input_transform_ms": input_transform_ms,
             "repeat_inputs_ms": repeat_inputs_ms,
             "model_infer_ms": model_infer_ms,
-            "output_transform_ms": output_transform_ms,
+            "output_transform_ms": 0.0,
             "num_samples": num_samples,
             "backend": "pytorch" if self._policy._is_pytorch_model else "jax",
             "has_explicit_noise": noise is not None,
             "has_seed": seed is not None,
         }
-        return transformed_outputs
+        return outputs, timing
 
     def _repeat_inputs(self, inputs: dict[str, Any], num_samples: int) -> dict[str, Any]:
         return jax.tree.map(
@@ -150,6 +175,9 @@ class MultiSamplePolicy:
             sample = _copy_sample(outputs, index)
             per_sample_outputs.append(self._policy._output_transform(sample))
         return _stack_trees(per_sample_outputs)
+
+    def apply_output_transform(self, sample: dict[str, Any]) -> dict[str, Any]:
+        return self._policy._output_transform(sample)
 
     def _infer_many_jax(
         self,

@@ -72,23 +72,23 @@ class BestOfNSamplePolicy:
         total_start_time = time.monotonic()
         request_seed = int(secrets.randbelow(2**31 - 1) + 1)
         noise = self._sample_noise(request_seed)
-        sampled = self._policy.infer_many(
+        sampled_raw, raw_policy_timing = self._policy.infer_many_raw(
             obs,
             num_samples=self._num_samples,
             seed=request_seed,
             noise=noise,
         )
-        if "policy_latent" not in sampled:
+        if "policy_latent" not in sampled_raw:
             raise KeyError(
                 "Multi-sample policy response is missing policy_latent. "
                 "The critic reranker requires return_policy_latent support."
             )
 
-        critic_state = self._extract_critic_state(obs, self._num_samples)
+        critic_state = self._extract_critic_state(sampled_raw, obs, self._num_samples)
         critic_response = self._critic_client.score(
-            policy_latent=sampled["policy_latent"],
+            policy_latent=sampled_raw["policy_latent"],
             state=critic_state,
-            action_chunk=sampled["actions"],
+            action_chunk=sampled_raw["actions"],
         )
 
         scores = np.asarray(critic_response["scores"], dtype=np.float32).reshape(-1)
@@ -97,12 +97,14 @@ class BestOfNSamplePolicy:
                 f"Critic returned {scores.shape[0]} scores for {self._num_samples} policy samples"
             )
         best_index = int(np.argmax(scores))
-        payload = {k: v for k, v in sampled.items() if k != "policy_timing"}
-        best = _select_sample(payload, best_index)
+        selected_raw = _select_sample(sampled_raw, best_index)
+        output_transform_start = time.monotonic()
+        best = self._policy.apply_output_transform(selected_raw)
+        output_transform_ms = (time.monotonic() - output_transform_start) * 1000.0
         if not self._send_policy_latent:
             best.pop("policy_latent", None)
 
-        policy_timing = dict(sampled.get("policy_timing", {}))
+        policy_timing = dict(raw_policy_timing)
         policy_timing.update(
             {
                 "seed": request_seed,
@@ -110,6 +112,7 @@ class BestOfNSamplePolicy:
                 "noise_scale": self._noise_scale,
                 "selected_sample_index": best_index,
                 "selected_estimated_return": float(scores[best_index]),
+                "output_transform_ms": output_transform_ms,
                 "total_ms": (time.monotonic() - total_start_time) * 1000.0,
             }
         )
@@ -130,7 +133,17 @@ class BestOfNSamplePolicy:
             noise = noise * np.float32(self._noise_scale)
         return noise
 
-    def _extract_critic_state(self, obs: dict[str, Any], num_samples: int) -> np.ndarray:
+    def _extract_critic_state(
+        self,
+        sampled_raw: dict[str, Any],
+        obs: dict[str, Any],
+        num_samples: int,
+    ) -> np.ndarray:
+        if "state" in sampled_raw:
+            state = np.asarray(sampled_raw["state"], dtype=np.float32)
+            if state.ndim == 2 and state.shape[0] == num_samples:
+                return state
+
         if "observation/state" in obs:
             state = obs["observation/state"]
         elif "observation.state" in obs:
@@ -139,8 +152,8 @@ class BestOfNSamplePolicy:
             state = obs["state"]
         else:
             raise KeyError(
-                "Unable to find original observation state for critic reranking. "
-                "Expected one of: observation/state, observation.state, state."
+                "Unable to find observation state for critic reranking. "
+                "Expected transformed sampled_raw['state'] or one of: observation/state, observation.state, state."
             )
         state = np.asarray(state, dtype=np.float32).reshape(-1)
         return np.repeat(state[np.newaxis, :], repeats=num_samples, axis=0)

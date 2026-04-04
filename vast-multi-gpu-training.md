@@ -53,9 +53,9 @@ hf download huggingaccounttest/lehome_train_episodes \
   --repo-type dataset \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_train_episodes"
 
-hf download huggingaccounttest/lehome_val_episodes \
-  --repo-type dataset \
-  --local-dir "${HF_LEROBOT_HOME}/local/lehome_val_episodes"
+hf download huggingaccounttest/full-30epoch-OF-run \
+  --repo-type model \
+  --local-dir "D:\LeHome-Challenge\submission\openpi\submission\checkpoint"
 
 Update Training Config for Policy
 
