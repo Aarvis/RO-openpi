@@ -85,10 +85,11 @@ class BestOfNSamplePolicy:
             )
 
         critic_state = self._extract_critic_state(sampled_raw, obs, self._num_samples)
+        critic_action_chunk = self._extract_critic_action_chunk(sampled_raw, critic_state)
         critic_response = self._critic_client.score(
             policy_latent=sampled_raw["policy_latent"],
             state=critic_state,
-            action_chunk=sampled_raw["actions"],
+            action_chunk=critic_action_chunk,
         )
 
         scores = np.asarray(critic_response["scores"], dtype=np.float32).reshape(-1)
@@ -157,3 +158,27 @@ class BestOfNSamplePolicy:
             )
         state = np.asarray(state, dtype=np.float32).reshape(-1)
         return np.repeat(state[np.newaxis, :], repeats=num_samples, axis=0)
+
+    def _extract_critic_action_chunk(
+        self,
+        sampled_raw: dict[str, Any],
+        critic_state: np.ndarray,
+    ) -> np.ndarray:
+        if "actions" not in sampled_raw:
+            raise KeyError("Multi-sample policy response is missing actions for critic reranking.")
+
+        action_chunk = np.asarray(sampled_raw["actions"], dtype=np.float32)
+        if action_chunk.ndim != 3:
+            raise ValueError(
+                f"Expected sampled_raw['actions'] with shape (B,T,D), got {action_chunk.shape}"
+            )
+
+        critic_action_dim = int(np.asarray(critic_state).shape[-1])
+        if action_chunk.shape[-1] == critic_action_dim:
+            return action_chunk
+        if action_chunk.shape[-1] > critic_action_dim:
+            return action_chunk[..., :critic_action_dim]
+        raise ValueError(
+            "Raw sampled actions have fewer dims than critic state/action representation. "
+            f"Got action dim {action_chunk.shape[-1]} for critic dim {critic_action_dim}."
+        )
