@@ -315,7 +315,10 @@ python -m parallel_eval \
   --num_episodes 5 \
   --max_workers 10 \
   --policy_type openpi_ws \
-  --policy_paths ws://host:8001,ws://host:8002,ws://host:8003 \
+  --policy_base_ws_url ws://20.244.4.116 \
+  --policy_start_port 8000 \
+  --policy_port_step 1 \
+  --policy_server_count 3 \
   --device cpu
 
 
@@ -328,6 +331,7 @@ python -m parallel_eval \
   --policy_base_ws_url ws://20.244.4.116 \
   --policy_start_port 8000 \
   --policy_port_step 1 \
+  --policy_server_count 5 \
   --device cpu
 
 

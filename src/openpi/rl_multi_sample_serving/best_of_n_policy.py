@@ -40,6 +40,8 @@ def _cast_msgpack_compatible(tree: dict[str, Any]) -> dict[str, Any]:
 
 
 class BestOfNSamplePolicy:
+    _CRITIC_INPUT_DIM = 16
+
     def __init__(
         self,
         *,
@@ -143,7 +145,7 @@ class BestOfNSamplePolicy:
         if "state" in sampled_raw:
             state = np.asarray(sampled_raw["state"], dtype=np.float32)
             if state.ndim == 2 and state.shape[0] == num_samples:
-                return state
+                return self._normalize_critic_state(state)
 
         if "observation/state" in obs:
             state = obs["observation/state"]
@@ -157,7 +159,17 @@ class BestOfNSamplePolicy:
                 "Expected transformed sampled_raw['state'] or one of: observation/state, observation.state, state."
             )
         state = np.asarray(state, dtype=np.float32).reshape(-1)
-        return np.repeat(state[np.newaxis, :], repeats=num_samples, axis=0)
+        return self._normalize_critic_state(np.repeat(state[np.newaxis, :], repeats=num_samples, axis=0))
+
+    def _normalize_critic_state(self, state: np.ndarray) -> np.ndarray:
+        state = np.asarray(state, dtype=np.float32)
+        if state.ndim != 2:
+            raise ValueError(f"Expected critic state with shape (B,D), got {state.shape}")
+        if state.shape[-1] < self._CRITIC_INPUT_DIM:
+            raise ValueError(
+                f"Critic state dim mismatch. Expected at least {self._CRITIC_INPUT_DIM}, got {state.shape[-1]}"
+            )
+        return state[..., : self._CRITIC_INPUT_DIM]
 
     def _extract_critic_action_chunk(
         self,
@@ -173,12 +185,14 @@ class BestOfNSamplePolicy:
                 f"Expected sampled_raw['actions'] with shape (B,T,D), got {action_chunk.shape}"
             )
 
-        critic_action_dim = int(np.asarray(critic_state).shape[-1])
-        if action_chunk.shape[-1] == critic_action_dim:
-            return action_chunk
-        if action_chunk.shape[-1] > critic_action_dim:
-            return action_chunk[..., :critic_action_dim]
-        raise ValueError(
-            "Raw sampled actions have fewer dims than critic state/action representation. "
-            f"Got action dim {action_chunk.shape[-1]} for critic dim {critic_action_dim}."
-        )
+        critic_action_dim = self._CRITIC_INPUT_DIM
+        if int(np.asarray(critic_state).shape[-1]) != critic_action_dim:
+            raise ValueError(
+                f"Critic state dim mismatch. Expected {critic_action_dim}, got {np.asarray(critic_state).shape[-1]}"
+            )
+        if action_chunk.shape[-1] < critic_action_dim:
+            raise ValueError(
+                "Raw sampled actions have fewer dims than critic action representation. "
+                f"Got action dim {action_chunk.shape[-1]} for critic dim {critic_action_dim}."
+            )
+        return action_chunk[..., :critic_action_dim]
