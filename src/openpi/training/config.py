@@ -1172,7 +1172,7 @@ _CONFIGS = [
         # and only provide top-camera images. Wrist views are masked absent and gripper dims are
         # excluded from stats and action loss.
         name="pi05_lehome_precomputed_16d_pretrain",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, action_dim=16),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
         run_val=False,
         data=LeRobotLehomePrecomputed16DDataConfig(
