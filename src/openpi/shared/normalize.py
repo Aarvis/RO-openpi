@@ -34,14 +34,15 @@ class RunningStats:
         Args:
             vectors (np.ndarray): An array where all dimensions except the last are batch dimensions.
         """
+        original_shape = batch.shape
         batch = batch.reshape(-1, batch.shape[-1])
         vector_length = batch.shape[1]
         if mask is None:
             mask = np.ones(batch.shape, dtype=bool)
         else:
             mask = np.asarray(mask, dtype=bool)
-            if mask.shape != batch.shape:
-                mask = np.broadcast_to(mask, batch.shape)
+            if mask.shape != original_shape:
+                mask = np.broadcast_to(mask, original_shape)
             mask = mask.reshape(batch.shape)
 
         if self._count is None:
