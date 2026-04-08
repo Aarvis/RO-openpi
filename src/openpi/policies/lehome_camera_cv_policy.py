@@ -36,6 +36,25 @@ def _parse_image(image) -> np.ndarray:
     return image
 
 
+def _parse_optional_image(image, *, fallback: np.ndarray) -> tuple[np.ndarray, np.bool_]:
+    if image is None:
+        return np.zeros_like(fallback), np.False_
+    return _parse_image(image), np.True_
+
+
+def _parse_mask_indices(indices_csv: str, *, vector_length: int) -> np.ndarray:
+    mask = np.ones(vector_length, dtype=bool)
+    for token in str(indices_csv).split(","):
+        token = token.strip()
+        if not token:
+            continue
+        index = int(token)
+        if index < 0 or index >= vector_length:
+            raise ValueError(f"Mask index {index} out of range for vector length {vector_length}")
+        mask[index] = False
+    return mask
+
+
 def _canonicalize_quaternion(
     quat: np.ndarray,
     *,
@@ -331,3 +350,72 @@ class LehomeCameraCVOutputs(transforms.DataTransformFn):
         result = dict(data)
         result["actions"] = np.asarray(out_actions, dtype=np.float32)
         return result
+
+
+@dataclasses.dataclass(frozen=True)
+class LehomePrecomputed16DInputs(transforms.DataTransformFn):
+    model_type: _model.ModelType
+    state_dim: int = 16
+    gripper_dim_indices_csv: str = "7,15"
+    fill_value: float = 0.0
+
+    def __call__(self, data: dict) -> dict:
+        top_image = _parse_image(data["observation/top_rgb"])
+        left_image, left_valid = _parse_optional_image(data.get("observation/left_rgb"), fallback=top_image)
+        right_image, right_valid = _parse_optional_image(data.get("observation/right_rgb"), fallback=top_image)
+
+        match self.model_type:
+            case _model.ModelType.PI0 | _model.ModelType.PI05:
+                names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+                images = (top_image, left_image, right_image)
+                image_masks = (np.True_, left_valid, right_valid)
+            case _model.ModelType.PI0_FAST:
+                names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
+                images = (top_image, np.zeros_like(top_image), right_image)
+                image_masks = (np.True_, np.True_, right_valid)
+            case _:
+                raise ValueError(f"Unsupported model type: {self.model_type}")
+
+        state = np.asarray(data["observation/state"], dtype=np.float32).reshape(-1)
+        if state.size != self.state_dim:
+            raise ValueError(f"Expected observation/state {self.state_dim}D, got {state.size}")
+
+        valid_dim_mask = _parse_mask_indices(self.gripper_dim_indices_csv, vector_length=self.state_dim)
+        masked_state = state.copy()
+        masked_state[~valid_dim_mask] = self.fill_value
+
+        inputs = {
+            "state": masked_state,
+            "state_mask": valid_dim_mask.astype(bool),
+            "image": dict(zip(names, images, strict=True)),
+            "image_mask": dict(zip(names, image_masks, strict=True)),
+        }
+
+        if "actions" in data:
+            actions = np.asarray(data["actions"], dtype=np.float32)
+            if actions.ndim == 1:
+                if actions.shape[0] != self.state_dim:
+                    raise ValueError(
+                        f"Expected 1D actions with {self.state_dim} values, got shape={actions.shape}"
+                    )
+            elif actions.ndim == 2:
+                if actions.shape[-1] != self.state_dim:
+                    raise ValueError(
+                        f"Expected 2D actions with last dim {self.state_dim}, got shape={actions.shape}"
+                    )
+            else:
+                raise ValueError(
+                    f"Unsupported actions shape {actions.shape}. Expected ({self.state_dim},) or (T,{self.state_dim})."
+                )
+
+            masked_actions = actions.copy()
+            masked_actions[..., ~valid_dim_mask] = self.fill_value
+            inputs["actions"] = masked_actions
+            inputs["action_mask"] = np.broadcast_to(valid_dim_mask, masked_actions.shape).copy()
+
+        if "prompt" in data:
+            if isinstance(data["prompt"], bytes):
+                data["prompt"] = data["prompt"].decode("utf-8")
+            inputs["prompt"] = data["prompt"]
+
+        return inputs

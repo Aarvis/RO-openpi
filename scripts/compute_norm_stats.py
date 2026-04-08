@@ -99,12 +99,13 @@ def main(config_name: str, max_frames: int | None = None):
             data_config, config.model.action_horizon, config.batch_size, config.model, config.num_workers, max_frames
         )
 
-    keys = ["state", "actions"]
+    keys = {"state": "state_mask", "actions": "action_mask"}
     stats = {key: normalize.RunningStats() for key in keys}
 
     for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing stats"):
-        for key in keys:
-            stats[key].update(np.asarray(batch[key]))
+        for key, mask_key in keys.items():
+            mask = None if mask_key not in batch else np.asarray(batch[mask_key])
+            stats[key].update(np.asarray(batch[key]), mask=mask)
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 

@@ -612,6 +612,53 @@ class LeRobotLehomeCameraCVActionChunkedDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotLehomePrecomputed16DDataConfig(DataConfigFactory):
+    """
+    LeHome pretraining config for datasets that already store 16D camera-CV state/action values
+    and only provide the top camera on disk.
+    """
+
+    action_dim: int = 16
+    gripper_dim_indices_csv: str = "7,15"
+    fill_value: float = 0.0
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/top_rgb": "observation.images.top_rgb",
+                        "observation/state": "observation.state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                lehome_camera_cv_policy.LehomePrecomputed16DInputs(
+                    model_type=model_config.model_type,
+                    state_dim=self.action_dim,
+                    gripper_dim_indices_csv=self.gripper_dim_indices_csv,
+                    fill_value=self.fill_value,
+                )
+            ]
+        )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class RLDSDroidDataConfig(DataConfigFactory):
     """
     Config for training on DROID, using RLDS data format (for efficient training on larger datasets).
@@ -1119,6 +1166,33 @@ _CONFIGS = [
         # batch_size=64,
         # log_interval=50,
         # save_interval=670,
+    ),
+    TrainConfig(
+        # LeHome pretraining config for datasets that already store 16D camera-CV state/action values
+        # and only provide top-camera images. Wrist views are masked absent and gripper dims are
+        # excluded from stats and action loss.
+        name="pi05_lehome_precomputed_16d_pretrain",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False, action_dim=16),
+        num_workers=32,
+        run_val=False,
+        data=LeRobotLehomePrecomputed16DDataConfig(
+            repo_id="local/lehome_precomputed_16d_pretrain",
+            base_config=DataConfig(prompt_from_task=True),
+            action_dim=16,
+            gripper_dim_indices_csv="7,15",
+            fill_value=0.0,
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2000,
+            peak_lr=1e-4,
+            decay_steps=50000,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=50000,
+        batch_size=256,
+        log_interval=100,
+        save_interval=10000,
     ),
     TrainConfig(
         # LeHome camera-CV variant for datasets that already store full action chunks per datapoint.

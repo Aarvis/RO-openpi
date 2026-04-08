@@ -434,14 +434,14 @@ python -m parallel_eval \
   --headless \
   --enable_cameras \
   --garment_type custom \
-  --num_episodes 2 \
+  --num_episodes 50 \
   --max_workers 4 \
   --gpu_ids 0,1,2,3 \
   --ramp_up_episode_gate 1 \
   --worker_timeout_sec 86400 \
   --policy_type openpi_ws \
   --policy_base_ws_url ws://20.244.4.116 \
-  --policy_start_port 8000 \
+  --policy_start_port 8004 \
   --policy_port_step 1 \
   --step_hz 30 \
   --sim_device cpu \

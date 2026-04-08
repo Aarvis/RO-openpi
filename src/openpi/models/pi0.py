@@ -212,7 +212,14 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        sq_error = jnp.square(v_t - u_t)
+        if observation.action_mask is not None:
+            action_mask = jnp.asarray(observation.action_mask, dtype=sq_error.dtype)
+            action_mask = jnp.broadcast_to(action_mask, sq_error.shape)
+            denom = jnp.clip(jnp.sum(action_mask, axis=-1), 1.0)
+            return jnp.sum(sq_error * action_mask, axis=-1) / denom
+
+        return jnp.mean(sq_error, axis=-1)
 
     def _compute_prefix_cache(
         self,
