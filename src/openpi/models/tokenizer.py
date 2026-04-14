@@ -19,13 +19,35 @@ class PaligemmaTokenizer:
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
-    def tokenize(self, prompt: str, state: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
+    def _serialize_state(
+        self,
+        state: np.ndarray,
+        state_mask: np.ndarray | None = None,
+    ) -> str:
+        state = np.asarray(state, dtype=np.float32).reshape(-1)
+        if state_mask is None:
+            state_mask = np.ones_like(state, dtype=bool)
+        else:
+            state_mask = np.asarray(state_mask, dtype=bool).reshape(-1)
+            if state_mask.shape != state.shape:
+                raise ValueError(f"state_mask shape {state_mask.shape} must match state shape {state.shape}")
+
+        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
+        state_tokens = [str(value) if is_valid else "MISSING" for value, is_valid in zip(discretized_state, state_mask, strict=True)]
+        state_mask_tokens = ["1" if is_valid else "0" for is_valid in state_mask]
+        return f"State: {' '.join(state_tokens)}; StateMask: {' '.join(state_mask_tokens)};"
+
+    def tokenize(
+        self,
+        prompt: str,
+        state: np.ndarray | None = None,
+        state_mask: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
         if state is not None:
             # This is the Pi05 format, where the state is part of the discrete language input.
-            discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-            state_str = " ".join(map(str, discretized_state))
-            full_prompt = f"Task: {cleaned_text}, State: {state_str};\nAction: "
+            state_str = self._serialize_state(state, state_mask)
+            full_prompt = f"Task: {cleaned_text}, {state_str}\nAction: "
             tokens = self._tokenizer.encode(full_prompt, add_bos=True)
         else:
             # This is the Pi0 format, where the state is part of the continuous action expert input.

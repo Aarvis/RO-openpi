@@ -18,6 +18,8 @@ hf repos settings huggingaccounttest/lehome_train_episodes \
   --gated manual
 
 
+
+
 hf upload huggingaccounttest/lehome_val_episodes \
   "/datadrive/hf_cache/lerobot/local/lehome_val_episodes" \
   . \
@@ -25,6 +27,13 @@ hf upload huggingaccounttest/lehome_val_episodes \
 hf repos settings huggingaccounttest/lehome_val_episodes \
   --repo-type dataset \
   --gated manual
+
+hf upload huggingaccounttest/robot_only_finetune_with_state_1_epoch \
+  "/workspace/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_train_with_state_injected/800" \
+  . \
+  --repo-type model
+
+
 
 ```bash
 mkdir -p /workspace/cache/openpi
@@ -48,10 +57,25 @@ export MKL_NUM_THREADS=1
 ```
 
 Download Dataset from HF
-mkdir -p "${HF_LEROBOT_HOME}/huggingaccounttest/lehome_train_episodes" && \
-hf download huggingaccounttest/lehome_train_episodes \
+mkdir -p "${HF_LEROBOT_HOME}/huggingaccounttest/lehome_all_top_garment" && \
+hf download huggingaccounttest/lehome_all_top_garment \
+  --repo-type dataset \
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_top_garment"
+
+
+mkdir -p "${HF_LEROBOT_HOME}/huggingaccounttest/lehome_pretrain_human_all_tops_1" && \
+hf download huggingaccounttest/lehome_pretrain_human_all_tops_1 \
   --repo-type dataset \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_train_episodes"
+
+
+
+
+
+
+hf download huggingaccounttest/lehome_hum_pretrain16D_all_top_2_epoch \
+  --repo-type model \
+  --local-dir "/workspace/lehome-openpi/checkpoint_pretrain"
 
 hf download huggingaccounttest/full-30epoch-OF-run \
   --repo-type model \
@@ -64,8 +88,8 @@ compute norm_stats for training data
 uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 
 
-uv run scripts/train.py \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.96 uv run scripts/train.py \
   pi05_lehome_camera_cv_robot_finetune\
-  --exp-name lehome_train_eval \
+  --exp-name lehome_robot_ft_state_injected\
   --overwrite \
   --fsdp-devices 1

@@ -256,13 +256,15 @@ class TokenizePrompt(DataTransformFn):
         if self.discrete_state_input:
             if (state := data.get("state", None)) is None:
                 raise ValueError("State is required.")
+            state_mask = data.get("state_mask")
         else:
             state = None
+            state_mask = None
 
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt, state)
+        tokens, token_masks = self.tokenizer.tokenize(prompt, state, state_mask)
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 

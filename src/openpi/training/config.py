@@ -1133,14 +1133,14 @@ _CONFIGS = [
         name="pi05_lehome_camera_cv_robot_finetune",
         model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
         num_workers=32,
-        run_val=True,
-        checkpoint_strategy="best_val",
+        run_val=False,
+        checkpoint_strategy="manual",
         val_repo_id="local/lehome_val_episodes",
         val_frequency=1000,
         val_batch_size=400,
         data=LeRobotLehomeCameraCVDataConfig(
-            # repo_id="local/lehome_train_episodes",
-            repo_id="local/lehome_train_episodes",
+            # repo_id="local/lehome_all_top_garment",
+            repo_id="local/lehome_all_top_garment",
             base_config=DataConfig(prompt_from_task=True),
             use_delta_joint_actions=False,
             action_dim=16,
@@ -1150,16 +1150,17 @@ _CONFIGS = [
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=600,
+            warmup_steps=220,
             peak_lr=1e-4,
-            decay_steps=14000,
+            decay_steps=1800,
             decay_lr=5e-6,
         ),
+        #/workspace/lehome-openpi/checkpoint_pretrain/params
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
-        num_train_steps=14000,
+        num_train_steps=1800,
         batch_size=400,
-        log_interval=100,
-        save_steps=(100, 4000),
+        log_interval=50,
+        save_steps=(900),
         keep_period=None,
         max_to_keep=4,
         # num_train_steps=1000,
@@ -1170,9 +1171,10 @@ _CONFIGS = [
     TrainConfig(
         # LeHome pretraining config for datasets that already store 16D camera-CV state/action values
         # and only provide top-camera images. Wrist views are masked absent and gripper dims are
-        # excluded from stats and action loss.
+        # excluded from stats and action loss. Gripper state dims are tokenized as explicit missing
+        # slots when discrete_state_input is enabled.
         name="pi05_lehome_precomputed_16d_pretrain",
-        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=True),
         num_workers=32,
         run_val=False,
         data=LeRobotLehomePrecomputed16DDataConfig(

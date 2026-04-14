@@ -78,6 +78,24 @@ def test_tokenize_prompt():
     assert np.allclose(tok_mask, data["tokenized_prompt_mask"])
 
 
+def test_tokenize_prompt_with_masked_state():
+    tokenizer = _tokenizer.PaligemmaTokenizer(max_len=64)
+    transform = _transforms.TokenizePrompt(tokenizer, discrete_state_input=True)
+
+    state = np.linspace(-1.0, 1.0, 16, dtype=np.float32)
+    state_mask = np.ones(16, dtype=bool)
+    state_mask[[7, 15]] = False
+
+    data = transform({"prompt": "Fold the garment", "state": state, "state_mask": state_mask})
+
+    tok_prompt, tok_mask = tokenizer.tokenize("Fold the garment", state, state_mask)
+    assert np.allclose(tok_prompt, data["tokenized_prompt"])
+    assert np.allclose(tok_mask, data["tokenized_prompt_mask"])
+
+    unmasked_prompt, _ = tokenizer.tokenize("Fold the garment", state)
+    assert not np.array_equal(unmasked_prompt, data["tokenized_prompt"])
+
+
 def test_tokenize_no_prompt():
     transform = _transforms.TokenizePrompt(_tokenizer.PaligemmaTokenizer())
 
