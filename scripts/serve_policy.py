@@ -27,7 +27,16 @@ class Checkpoint:
     # Training config name (e.g., "pi0_aloha_sim").
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
-    dir: str
+    # PPO-head configs may omit this if base_checkpoint_path is set in config.
+    dir: str | None = None
+    # Optional PPO actor head checkpoint for configs that enable PPO heads.
+    actor_head_path: str | None = None
+    # Optional PPO value head checkpoint for configs that enable PPO heads.
+    value_head_path: str | None = None
+    # Optional device for PPO heads, e.g. "cuda", "cuda:0", or "cpu".
+    ppo_device: str | None = None
+    # If set, overrides the PPO config's deterministic sampling flag.
+    ppo_deterministic: bool | None = None
 
 
 @dataclasses.dataclass
@@ -100,11 +109,23 @@ def create_policy(args: Args) -> _policy.Policy:
     sample_kwargs = {"return_policy_latent": True} if args.send_policy_latent else None
     match args.policy:
         case Checkpoint():
+            train_config = _config.get_config(args.policy.config)
+            checkpoint_dir = args.policy.dir
+            if checkpoint_dir is None and train_config.ppo_policy is not None:
+                checkpoint_dir = train_config.ppo_policy.base_checkpoint_path
+            if checkpoint_dir is None:
+                raise ValueError(
+                    "--policy.dir is required unless the config's ppo_policy.base_checkpoint_path is set."
+                )
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config),
-                args.policy.dir,
+                train_config,
+                checkpoint_dir,
                 default_prompt=args.default_prompt,
                 sample_kwargs=sample_kwargs,
+                ppo_actor_head_path=args.policy.actor_head_path,
+                ppo_value_head_path=args.policy.value_head_path,
+                ppo_device=args.policy.ppo_device,
+                ppo_deterministic=args.policy.ppo_deterministic,
             )
         case Default():
             return create_default_policy(

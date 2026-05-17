@@ -32,3 +32,39 @@ docker pull 471183654236.dkr.ecr.ap-south-1.amazonaws.com/dummy_checkpoint_40k:l
 
 docker run --rm --gpus all -p 8000:8080 \
   471183654236.dkr.ecr.ap-south-1.amazonaws.com/dummy_checkpoint_40k:latest
+
+
+docker buildx build --load -t lehome-openpi-submission -f scripts/docker/lehome_submission.Dockerfile .
+
+docker tag lehome-openpi-submission aarvisarchive/dume_ft_with_state_10e:latest
+
+docker push aarvisarchive/dume_ft_with_state_10e:latest
+
+
+
+docker buildx build --load -t lehome-openpi-submission-b_4_ft_20 -f scripts/docker/lehome_submission.Dockerfile .
+
+
+
+
+
+docker tag lehome-openpi-submission-b_4_ft_20 aarvisarchive/dume_b_4_ft_20:latest
+
+docker push aarvisarchive/dume_b_4_ft_20:latest
+
+
+docker run --rm --gpus all -p 8000:8080 aarvisarchive/dume_b_4_ft_10:latest
+
+
+docker buildx build --load -t lehome-openpi-submission-rl_b_4_ft_10 -f scripts/docker/lehome_submission_rl_critic.Dockerfile .
+
+
+docker tag lehome-openpi-submission-rl_b_4_ft_10 aarvisarchive/dume_rl_b_4_ft_10:latest
+
+docker tag lehome-openpi-submission-rl_b_4_ft_20 aarvisarchive/dume_rl_b_4_ft_20:latest
+
+docker push aarvisarchive/dume_rl_b_4_ft_10:latest
+
+docker push aarvisarchive/dume_rl_b_4_ft_20:latest
+
+aarvisarchive/dume_rl_b_4_ft_10

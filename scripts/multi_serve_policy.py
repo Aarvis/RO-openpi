@@ -10,7 +10,8 @@ uv run scripts/multi_serve_policy.py \
   --num-servers 4 \
   --start-port 8000 \
   --gpu-id 0 \
-  --total-gpu-fraction 1.0 \
+  --total-gpu-fraction 0.90 \
+  --total-ppo-gpu-fraction 0.05 \
   -- policy:checkpoint \
   --policy.config pi05_lehome_robot_finetune \
   --policy.dir /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_robot_finetune/all_data_3_epoch/20000
@@ -57,6 +58,16 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Total XLA GPU fraction budget shared across all servers. "
             "Each server gets total_gpu_fraction / num_servers."
+        ),
+    )
+    parser.add_argument(
+        "--total-ppo-gpu-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "Total PyTorch PPO-head GPU fraction budget shared across all servers. "
+            "Each server gets total_ppo_gpu_fraction / num_servers. "
+            "Use 0 to leave PyTorch unbounded or when PPO heads run on CPU."
         ),
     )
     parser.add_argument(
@@ -123,6 +134,7 @@ def _build_env(
     base_env: dict[str, str],
     gpu_id: str,
     per_server_fraction: float,
+    per_server_ppo_fraction: float,
     xla_preallocate: bool,
     server_index: int,
     port: int,
@@ -131,6 +143,7 @@ def _build_env(
     env["CUDA_VISIBLE_DEVICES"] = gpu_id
     env["XLA_PYTHON_CLIENT_MEM_FRACTION"] = f"{per_server_fraction:.6f}"
     env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "true" if xla_preallocate else "false"
+    env["OPENPI_PPO_GPU_MEM_FRACTION"] = f"{per_server_ppo_fraction:.6f}"
     env["OPENPI_MULTI_SERVER_INDEX"] = str(server_index)
     env["OPENPI_MULTI_SERVER_PORT"] = str(port)
     return env
@@ -144,11 +157,23 @@ def main() -> None:
         raise ValueError("--num-servers must be > 0.")
     if args.total_gpu_fraction <= 0:
         raise ValueError("--total-gpu-fraction must be > 0.")
+    if args.total_ppo_gpu_fraction < 0:
+        raise ValueError("--total-ppo-gpu-fraction must be >= 0.")
+    if args.total_gpu_fraction + args.total_ppo_gpu_fraction > 1.0:
+        raise ValueError(
+            "--total-gpu-fraction + --total-ppo-gpu-fraction must be <= 1.0 "
+            "when VLA and PPO heads share one GPU."
+        )
 
     per_server_fraction = args.total_gpu_fraction / args.num_servers
+    per_server_ppo_fraction = args.total_ppo_gpu_fraction / args.num_servers
     if per_server_fraction > 1.0:
         raise ValueError(
             "Per-server fraction is > 1.0. Reduce --total-gpu-fraction or increase --num-servers."
+        )
+    if per_server_ppo_fraction > 1.0:
+        raise ValueError(
+            "Per-server PPO fraction is > 1.0. Reduce --total-ppo-gpu-fraction or increase --num-servers."
         )
 
     log_dir = Path(args.log_dir)
@@ -162,7 +187,9 @@ def main() -> None:
         "start_port": args.start_port,
         "gpu_id": args.gpu_id,
         "total_gpu_fraction": args.total_gpu_fraction,
+        "total_ppo_gpu_fraction": args.total_ppo_gpu_fraction,
         "per_server_fraction": per_server_fraction,
+        "per_server_ppo_fraction": per_server_ppo_fraction,
         "xla_preallocate": args.xla_preallocate,
         "stagger_seconds": args.stagger_seconds,
         "serve_policy_args": forward_args,
@@ -173,7 +200,9 @@ def main() -> None:
     print(f"[multi_serve_policy] run_dir={run_dir}")
     print(
         "[multi_serve_policy] launching "
-        f"{args.num_servers} servers, per_server_fraction={per_server_fraction:.6f}"
+        f"{args.num_servers} servers, "
+        f"per_server_fraction={per_server_fraction:.6f}, "
+        f"per_server_ppo_fraction={per_server_ppo_fraction:.6f}"
     )
 
     for i in range(args.num_servers):
@@ -191,6 +220,7 @@ def main() -> None:
             base_env=os.environ,
             gpu_id=args.gpu_id,
             per_server_fraction=per_server_fraction,
+            per_server_ppo_fraction=per_server_ppo_fraction,
             xla_preallocate=args.xla_preallocate,
             server_index=i,
             port=port,
@@ -264,4 +294,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

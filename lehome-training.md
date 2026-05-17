@@ -29,7 +29,8 @@ How to run:
 uv run examples/lehome/convert_episode_json_to_lerobot.py \
   --json-path /datadrive/LEHOME/lehome-challenge/Datasets/all_episode_exports/four_types_merged/chunk-000__file-000/json/episode_000450.json \
   --repo-namelocal/lehome_all_e \
-  --overwrite
+  --overwrite \
+  --workers 1
 ```
 
 ```bash
@@ -41,6 +42,15 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --overwrite \
   --workers 1
 ```
+
+
+uv run examples/lehome/convert_all_episode_json_precomputed_16d_to_lerobot.py \
+  --json-root /workspace/lehome-challenge/Datasets/pretrain_all_garment_data_extracted \
+  --json-glob "**/episode_*.json" \
+  --repo-name local/lehome_all_garment_data_16d_pretrain \
+  --source-root .. \
+  --overwrite \
+  --workers 1
 
 uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --json-root /datadrive/LEHOME/lehome-challenge/Datasets/train_all_garment_individual_extracted \
@@ -61,9 +71,9 @@ hf repos settings huggingaccounttest/lehome_train_episodes \
 
 ```bash
 uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
-  --json-root /datadrive/LEHOME/lehome-challenge/Datasets/train_individual_garments_extracted \
+  --json-root /workspace/LEHOME/lehome-challenge/Datasets/all_garment_data_images_extracted \
   --json-glob "**/json/episode_*.json" \
-  --repo-name local/lehome_train_episodes \
+  --repo-name local/lehome_all_garment_data \
   --source-root .. \
   --overwrite \
   --workers 1
@@ -151,6 +161,8 @@ tmux new -s train
 tmux attach -t train
 Ctrl-b d
 
+tmux new -s server
+
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train_weighted.py pi05_lehome_camera_cv_robot_finetune --exp-name lehome_cv_weighted_run1 --overwrite
 ```
 
@@ -190,6 +202,9 @@ hf upload huggingaccounttest/pi05-all-lehome-dik-20K \
   /datadrive/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_cv_weighted_run1/20000 \
   . \
   --repo-type model
+
+
+
 
 hf upload huggingaccounttest/mid-16epoch-OF-run \
   /workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_train_eval/latest_val/9000 \
@@ -276,13 +291,31 @@ export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 
+find /usr /etc /opt /lib /lib64 -type f -name 'nvidia_icd.json' 2>/dev/null
+
+
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 unset CUDA_VISIBLE_DEVICES
 # or explicitly: export CUDA_VISIBLE_DEVICES=0,1,2,3
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+unset CUDA_VISIBLE_DEVICES
+# or explicitly: export CUDA_VISIBLE_DEVICES=0,1,2,3
+export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
+--allow_duplicate_garments
 
-uv pip install -e ~/LEHOME/lehome-openpi/packages/openpi-client
+python -m scripts.eval \
+    --policy_type docker \
+    --docker_url http://174.88.252.119:15019 \
+    --garment_type custom \
+    --num_episodes 10 \
+    --headless \
+    --device cpu \
+    --enable_cameras
+
+
+uv pip install -e /workspace/LEHOME/lehome-openpi/packages/openpi-client
 
 uv run scripts/serve_policy.py \
   --port 8000 \
@@ -405,7 +438,45 @@ python -m parallel_eval \
   --policy_port_step 1 \
   --step_hz 30 \
   --sim_device cpu \
-  --device cpu
+  --device cpu \
+  --time-analytics \
+
+
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --garment_type custom \
+  --num_episodes 2 \
+  --max_workers 8 \
+  --gpu_ids 0,1,2,3,4,5,6,7 \
+  --ramp_up_episode_gate 0 \
+  --worker_timeout_sec 7200 \
+  --policy_type openpi_ws \
+  --policy_base_ws_url ws://20.244.4.116 \
+  --policy_start_port 8000 \
+  --policy_port_step 1 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu \
+  --time-analytics \
+
+
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --garment_type custom \
+  --num_episodes 10 \
+  --max_workers 8 \
+  --gpu_ids 0,1,2,3,4,5,6,7 \
+  --ramp_up_episode_gate 1 \
+  --worker_timeout_sec 10800 \
+  --policy_type openpi_ws \
+  --policy_paths ws://154.57.34.105:11072,ws://154.57.34.105:13499,ws://154.57.34.105:17594,ws://154.57.34.105:17589,ws://154.57.34.105:10419,ws://154.57.34.105:18465 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu \
+  --time-analytics
+
 
 
 python -m parallel_eval \
@@ -525,6 +596,37 @@ python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py \
 
 
 
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://217.182.105.100:8000,ws://217.182.105.100:8001,ws://217.182.105.100:8002,ws://217.182.105.100:8003,ws://217.182.105.100:8004 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
+
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 25  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://174.27.12.205:40184,ws://174.27.12.205:40168,ws://174.27.12.205:40192,ws://174.27.12.205:40194  --step_hz 30  --sim_device cpu  --device cpu --time-analytics 
+
+--use_random_seed --allow_duplicate_garments
+
+
+--record_episodes --record_all_episodes --record_inbuilt_step_rewards --record_policy_latent 
+
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 100   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 40800   --policy_type openpi_ws   --policy_paths ws://192.222.55.139:12385,ws://192.222.55.139:52609,ws://192.222.55.139:58557,ws://192.222.55.139:44628,ws://192.222.55.139:52200,ws://192.222.55.139:6396,ws://192.222.55.139:45045 --step_hz 30   --sim_device cpu   --device cpu   --time-analytics
+
+
+python -m parallel_eval --headless --enable_cameras   --garment_type custom   --num_episodes 10   --max_workers 1  --gpu_ids 0   --worker_timeout_sec 10800   --policy_type openpi_ws   --policy_paths ws://20.38.175.29:1603 --step_hz 30   --sim_device cpu   --device cpu   --time-analytics   --record_episodes --record_all_episodes
+
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 14   --gpu_ids 0,1,2,3,4,5,6,7,8,9,10,11,12,13   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:8045,ws://20.150.146.205:8779 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+
+
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://34.27.194.137:8003,ws://34.27.194.137:8004,ws://34.27.194.137:8000,ws://34.27.194.137:8001,ws://34.27.194.137:8002 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:5275,ws://20.150.146.205:8601 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 
 

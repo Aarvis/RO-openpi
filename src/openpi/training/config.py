@@ -438,7 +438,7 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
     # damping: float = 0.05
-    damping: float = 0.05
+    damping: float = 0.03
     alpha: float = 1.0
     # line_search_alphas_csv: str = "1,0.5,0.25,0.05,1.5,2"
     line_search_alphas_csv: str = "1,0.5"
@@ -446,7 +446,7 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
     pos_weight: float = 1.0
     rot_weight: float = 1.0
     # max_iters: int = 80
-    max_iters: int = 20
+    max_iters: int = 80
     tol_pos_m: float = 1e-4
     tol_rot_deg: float = 0.2
     max_step_norm: float = 0.2
@@ -766,6 +766,38 @@ class LeRobotDROIDDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LehomePPOPolicyConfig:
+    """Runtime config for frozen-VLA PPO correction heads.
+
+    This is inference/rollout metadata only. The base VLA checkpoint is still
+    loaded through the normal policy checkpoint path, while actor/value heads can
+    be supplied separately by the policy server.
+    """
+
+    action_horizon: int = 10
+    action_dim: int = 12
+    latent_dim: int = 1024
+    state_dim: int = 12
+    token_dim: int = 256
+    num_layers: int = 4
+    num_heads: int = 8
+    mlp_ratio: float = 2.0
+    dropout: float = 0.0
+    correction_scale: float = 0.03
+    delta_clip: float = 2.0
+    log_std_init: float = -0.5
+    min_log_std: float = -5.0
+    max_log_std: float = 1.0
+    deterministic: bool = False
+    value_coef: float = 0.5
+    entropy_coef: float = 0.01
+    delta_coef: float = 0.001
+    base_checkpoint_path: str | None = None
+    actor_head_path: str | None = None
+    value_head_path: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
@@ -845,6 +877,11 @@ class TrainConfig:
 
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
+
+    # If set, serve this config as a frozen base policy with PPO correction/value
+    # heads for rollout collection. The standard training path ignores this
+    # field; training for these heads should use a separate PPO script.
+    ppo_policy: LehomePPOPolicyConfig | None = None
 
     # If the value is greater than 1, FSDP will be enabled and shard across number of specified devices; overall
     # device memory will be reduced but training could potentially be slower.
@@ -1160,13 +1197,61 @@ _CONFIGS = [
         num_train_steps=1800,
         batch_size=400,
         log_interval=50,
-        save_steps=(900),
+        save_steps=(900,),
         keep_period=None,
         max_to_keep=4,
         # num_train_steps=1000,
         # batch_size=64,
         # log_interval=50,
         # save_interval=670,
+    ),
+    TrainConfig(
+        # Inference-only rollout config: load a trained pi0.5 LeHome camera-CV
+        # checkpoint as a frozen base policy and add PPO correction/value heads.
+        name="pi05_lehome_trained_vla_with_ppo_heads",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=10, discrete_state_input=False),
+        num_workers=32,
+        run_val=False,
+        checkpoint_strategy="manual",
+        data=LeRobotLehomeCameraCVDataConfig(
+            repo_id="local/lehome_all_top_garment",
+            base_config=DataConfig(prompt_from_task=True),
+            use_delta_joint_actions=False,
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+            dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        policy_metadata={
+            "policy_family": "pi05_lehome_frozen_vla_ppo_heads",
+            "base_config": "pi05_lehome_camera_cv_robot_finetune",
+        },
+        ppo_policy=LehomePPOPolicyConfig(
+            action_horizon=10,
+            action_dim=12,
+            latent_dim=1024,
+            state_dim=12,
+            token_dim=256,
+            num_layers=4,
+            num_heads=8,
+            correction_scale=0.03,
+            delta_clip=2.0,
+            log_std_init=-0.5,
+            value_coef=0.5,
+            entropy_coef=0.01,
+            delta_coef=0.001,
+            # Fill these in when serving without CLI path overrides.
+            base_checkpoint_path=None,
+            actor_head_path=None,
+            value_head_path=None,
+        ),
+        num_train_steps=1,
+        batch_size=1,
+        log_interval=1,
+        keep_period=None,
+        max_to_keep=1,
     ),
     TrainConfig(
         # LeHome pretraining config for datasets that already store 16D camera-CV state/action values

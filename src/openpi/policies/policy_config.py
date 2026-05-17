@@ -1,6 +1,7 @@
 import logging
 import os
 import pathlib
+import dataclasses
 from typing import Any
 
 import jax.numpy as jnp
@@ -22,6 +23,10 @@ def create_trained_policy(
     default_prompt: str | None = None,
     norm_stats: dict[str, transforms.NormStats] | None = None,
     pytorch_device: str | None = None,
+    ppo_actor_head_path: str | None = None,
+    ppo_value_head_path: str | None = None,
+    ppo_device: str | None = None,
+    ppo_deterministic: bool | None = None,
 ) -> _policy.Policy:
     """Create a policy from a trained checkpoint.
 
@@ -42,6 +47,52 @@ def create_trained_policy(
         The function automatically detects whether the model is PyTorch-based by checking for the
         presence of "model.safensors" in the checkpoint directory.
     """
+    if train_config.ppo_policy is not None:
+        from openpi.policies import lehome_ppo_policy
+
+        ppo_config = train_config.ppo_policy
+        runtime_config = lehome_ppo_policy.LehomePPORuntimeConfig(
+            action_horizon=ppo_config.action_horizon,
+            action_dim=ppo_config.action_dim,
+            latent_dim=ppo_config.latent_dim,
+            state_dim=ppo_config.state_dim,
+            token_dim=ppo_config.token_dim,
+            num_layers=ppo_config.num_layers,
+            num_heads=ppo_config.num_heads,
+            mlp_ratio=ppo_config.mlp_ratio,
+            dropout=ppo_config.dropout,
+            correction_scale=ppo_config.correction_scale,
+            delta_clip=ppo_config.delta_clip,
+            log_std_init=ppo_config.log_std_init,
+            min_log_std=ppo_config.min_log_std,
+            max_log_std=ppo_config.max_log_std,
+            deterministic=ppo_config.deterministic if ppo_deterministic is None else ppo_deterministic,
+            value_coef=ppo_config.value_coef,
+            entropy_coef=ppo_config.entropy_coef,
+            delta_coef=ppo_config.delta_coef,
+        )
+        base_config = dataclasses.replace(train_config, ppo_policy=None)
+        base_sample_kwargs = dict(sample_kwargs or {})
+        base_sample_kwargs["return_policy_latent"] = True
+        base_policy = create_trained_policy(
+            base_config,
+            checkpoint_dir,
+            repack_transforms=repack_transforms,
+            sample_kwargs=base_sample_kwargs,
+            default_prompt=default_prompt,
+            norm_stats=norm_stats,
+            pytorch_device=pytorch_device,
+        )
+        return lehome_ppo_policy.LehomePPOPolicy(
+            base_policy,
+            config=runtime_config,
+            actor_head_path=ppo_actor_head_path or ppo_config.actor_head_path,
+            value_head_path=ppo_value_head_path or ppo_config.value_head_path,
+            device=ppo_device,
+            seed=train_config.seed,
+            metadata=train_config.policy_metadata,
+        )
+
     repack_transforms = repack_transforms or transforms.Group()
     checkpoint_dir = download.maybe_download(str(checkpoint_dir))
 
