@@ -1,0 +1,1103 @@
+{
+  "metadata": {
+    "description": "FK reconstruction matrices from URDF common schema",
+    "source_urdf_common": {
+      "type": "urdf",
+      "path": "e:\\LeHome-Challenge\\lehome-challenge\\Assets\\robots\\so101_new_calib.urdf"
+    },
+    "source_bimanual_bases": "user-requested normalized world frame",
+    "angle_convention": "q_* symbols are radians; URDF rpy is fixed-axis roll-pitch-yaw",
+    "quaternion_convention": {
+      "localRot*_wxyz": "[w,x,y,z]",
+      "base_rot_wxyz": "[w,x,y,z]"
+    },
+    "urdf_mapping_note": "URDF origin xyz/rpy is represented as localPos0/localRot0; localPos1/localRot1 are identity to match the USD common schema.",
+    "ee_frame_note": "The EE chain ends at gripper_link after wrist_roll; the movable gripper jaw joint is included in joint_transforms but excluded from ordered_joint_names_to_ee."
+  },
+  "base_setup": {
+    "base_link_in_model": "base_link",
+    "left_arm_base_world": {
+      "pos": [
+        -0.23,
+        0.0,
+        0.0
+      ],
+      "rot_wxyz": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rot_source_key": "rot_wxyz",
+      "T_world_base": [
+        [
+          -1.0,
+          0.0,
+          0.0,
+          -0.23
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    "right_arm_base_world": {
+      "pos": [
+        0.23,
+        0.0,
+        0.0
+      ],
+      "rot_wxyz": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "rot_source_key": "rot_wxyz",
+      "T_world_base": [
+        [
+          -1.0,
+          0.0,
+          0.0,
+          0.23
+        ],
+        [
+          0.0,
+          -1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "ordered_chains": {
+    "ee_link_name": "gripper_link",
+    "ee_link_path": "gripper_link",
+    "ordered_joint_names_to_ee": [
+      "shoulder_pan",
+      "shoulder_lift",
+      "elbow_flex",
+      "wrist_flex",
+      "wrist_roll"
+    ],
+    "ordered_joint_names_full": [
+      "shoulder_pan",
+      "shoulder_lift",
+      "elbow_flex",
+      "wrist_flex",
+      "wrist_roll",
+      "gripper"
+    ],
+    "ordered_links_to_ee": [
+      "base_link",
+      "shoulder_link",
+      "upper_arm_link",
+      "lower_arm_link",
+      "wrist_link",
+      "gripper_link"
+    ],
+    "ordered_links_full": [
+      "base_link",
+      "shoulder_link",
+      "upper_arm_link",
+      "lower_arm_link",
+      "wrist_link",
+      "gripper_link",
+      "moving_jaw_so101_v1_link"
+    ]
+  },
+  "joint_transforms": {
+    "shoulder_pan": {
+      "name": "shoulder_pan",
+      "type": "revolute",
+      "parent_link": "base_link",
+      "child_link": "shoulder_link",
+      "axis_joint_frame": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "axis_raw": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "limit_raw": {
+        "lower": -1.91986,
+        "upper": 1.91986,
+        "unit": "radians"
+      },
+      "limit_as_rad": {
+        "lower": -1.91986,
+        "upper": 1.91986
+      },
+      "local_frames": {
+        "localPos0": [
+          0.0388353,
+          -8.97657e-09,
+          0.0624
+        ],
+        "localRot0_wxyz": [
+          -1.760363785199545e-12,
+          -1.326794896676365e-06,
+          0.9999999999982396,
+          1.326794896676365e-06
+        ],
+        "localRot0_rpy": [
+          3.14159,
+          0.0,
+          -3.14159
+        ],
+        "localPos1": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRot1_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "T_parent_joint_static": [
+        [
+          -0.9999999999964793,
+          -2.653589793343387e-06,
+          -7.0414969660857844e-12,
+          0.0388353
+        ],
+        [
+          -2.65358979335273e-06,
+          0.9999999999929585,
+          2.653589793343387e-06,
+          -8.97657e-09
+        ],
+        [
+          0.0,
+          2.65358979335273e-06,
+          -0.9999999999964793,
+          0.0624
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_joint_child_static": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_motion_symbolic": [
+        [
+          "(0*0)*(1-cos(q_shoulder_pan_rad)) + cos(q_shoulder_pan_rad)",
+          "(0*0)*(1-cos(q_shoulder_pan_rad)) - (1)*sin(q_shoulder_pan_rad)",
+          "(0*1)*(1-cos(q_shoulder_pan_rad)) + (0)*sin(q_shoulder_pan_rad)",
+          "0"
+        ],
+        [
+          "(0*0)*(1-cos(q_shoulder_pan_rad)) + (1)*sin(q_shoulder_pan_rad)",
+          "(0*0)*(1-cos(q_shoulder_pan_rad)) + cos(q_shoulder_pan_rad)",
+          "(0*1)*(1-cos(q_shoulder_pan_rad)) - (0)*sin(q_shoulder_pan_rad)",
+          "0"
+        ],
+        [
+          "(1*0)*(1-cos(q_shoulder_pan_rad)) - (0)*sin(q_shoulder_pan_rad)",
+          "(1*0)*(1-cos(q_shoulder_pan_rad)) + (0)*sin(q_shoulder_pan_rad)",
+          "(1*1)*(1-cos(q_shoulder_pan_rad)) + cos(q_shoulder_pan_rad)",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "1"
+        ]
+      ],
+      "T_parent_child_at_q0": [
+        [
+          -0.9999999999964793,
+          -2.653589793343387e-06,
+          -7.0414969660857844e-12,
+          0.0388353
+        ],
+        [
+          -2.65358979335273e-06,
+          0.9999999999929585,
+          2.653589793343387e-06,
+          -8.97657e-09
+        ],
+        [
+          0.0,
+          2.65358979335273e-06,
+          -0.9999999999964793,
+          0.0624
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "reconstruction_formula": "T_parent_child(q) = T_parent_joint_static @ T_motion(q) @ T_joint_child_static",
+      "input_symbol_q_rad": "q_shoulder_pan_rad"
+    },
+    "shoulder_lift": {
+      "name": "shoulder_lift",
+      "type": "revolute",
+      "parent_link": "shoulder_link",
+      "child_link": "upper_arm_link",
+      "axis_joint_frame": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "axis_raw": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "limit_raw": {
+        "lower": -1.74533,
+        "upper": 1.74533,
+        "unit": "radians"
+      },
+      "limit_as_rad": {
+        "lower": -1.74533,
+        "upper": 1.74533
+      },
+      "local_frames": {
+        "localPos0": [
+          -0.0303992,
+          -0.0182778,
+          -0.0542
+        ],
+        "localRot0_wxyz": [
+          -0.4999981633974483,
+          0.49999999999662686,
+          0.49999999999662686,
+          0.5000018366025518
+        ],
+        "localRot0_rpy": [
+          -1.5708,
+          -1.5708,
+          0.0
+        ],
+        "localPos1": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRot1_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "T_parent_joint_static": [
+        [
+          -3.673205103346574e-06,
+          0.9999999999865075,
+          3.6732051033217936e-06,
+          -0.0303992
+        ],
+        [
+          0.0,
+          -3.673205103346574e-06,
+          0.9999999999932537,
+          -0.0182778
+        ],
+        [
+          0.9999999999932537,
+          3.6732051033217936e-06,
+          1.3492435731251315e-11,
+          -0.0542
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_joint_child_static": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_motion_symbolic": [
+        [
+          "(0*0)*(1-cos(q_shoulder_lift_rad)) + cos(q_shoulder_lift_rad)",
+          "(0*0)*(1-cos(q_shoulder_lift_rad)) - (1)*sin(q_shoulder_lift_rad)",
+          "(0*1)*(1-cos(q_shoulder_lift_rad)) + (0)*sin(q_shoulder_lift_rad)",
+          "0"
+        ],
+        [
+          "(0*0)*(1-cos(q_shoulder_lift_rad)) + (1)*sin(q_shoulder_lift_rad)",
+          "(0*0)*(1-cos(q_shoulder_lift_rad)) + cos(q_shoulder_lift_rad)",
+          "(0*1)*(1-cos(q_shoulder_lift_rad)) - (0)*sin(q_shoulder_lift_rad)",
+          "0"
+        ],
+        [
+          "(1*0)*(1-cos(q_shoulder_lift_rad)) - (0)*sin(q_shoulder_lift_rad)",
+          "(1*0)*(1-cos(q_shoulder_lift_rad)) + (0)*sin(q_shoulder_lift_rad)",
+          "(1*1)*(1-cos(q_shoulder_lift_rad)) + cos(q_shoulder_lift_rad)",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "1"
+        ]
+      ],
+      "T_parent_child_at_q0": [
+        [
+          -3.673205103346574e-06,
+          0.9999999999865075,
+          3.6732051033217936e-06,
+          -0.0303992
+        ],
+        [
+          0.0,
+          -3.673205103346574e-06,
+          0.9999999999932537,
+          -0.0182778
+        ],
+        [
+          0.9999999999932537,
+          3.6732051033217936e-06,
+          1.3492435731251315e-11,
+          -0.0542
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "reconstruction_formula": "T_parent_child(q) = T_parent_joint_static @ T_motion(q) @ T_joint_child_static",
+      "input_symbol_q_rad": "q_shoulder_lift_rad"
+    },
+    "elbow_flex": {
+      "name": "elbow_flex",
+      "type": "revolute",
+      "parent_link": "upper_arm_link",
+      "child_link": "lower_arm_link",
+      "axis_joint_frame": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "axis_raw": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "limit_raw": {
+        "lower": -1.69,
+        "upper": 1.69,
+        "unit": "radians"
+      },
+      "limit_as_rad": {
+        "lower": -1.69,
+        "upper": 1.69
+      },
+      "local_frames": {
+        "localPos0": [
+          -0.11257,
+          -0.028,
+          0.0
+        ],
+        "localRot0_wxyz": [
+          0.7071054825112364,
+          0.0,
+          0.0,
+          0.7071080798594737
+        ],
+        "localRot0_rpy": [
+          0.0,
+          0.0,
+          1.5708
+        ],
+        "localPos1": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRot1_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "T_parent_joint_static": [
+        [
+          -3.673205103346574e-06,
+          -0.9999999999932537,
+          0.0,
+          -0.11257
+        ],
+        [
+          0.9999999999932537,
+          -3.673205103346574e-06,
+          0.0,
+          -0.028
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_joint_child_static": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_motion_symbolic": [
+        [
+          "(0*0)*(1-cos(q_elbow_flex_rad)) + cos(q_elbow_flex_rad)",
+          "(0*0)*(1-cos(q_elbow_flex_rad)) - (1)*sin(q_elbow_flex_rad)",
+          "(0*1)*(1-cos(q_elbow_flex_rad)) + (0)*sin(q_elbow_flex_rad)",
+          "0"
+        ],
+        [
+          "(0*0)*(1-cos(q_elbow_flex_rad)) + (1)*sin(q_elbow_flex_rad)",
+          "(0*0)*(1-cos(q_elbow_flex_rad)) + cos(q_elbow_flex_rad)",
+          "(0*1)*(1-cos(q_elbow_flex_rad)) - (0)*sin(q_elbow_flex_rad)",
+          "0"
+        ],
+        [
+          "(1*0)*(1-cos(q_elbow_flex_rad)) - (0)*sin(q_elbow_flex_rad)",
+          "(1*0)*(1-cos(q_elbow_flex_rad)) + (0)*sin(q_elbow_flex_rad)",
+          "(1*1)*(1-cos(q_elbow_flex_rad)) + cos(q_elbow_flex_rad)",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "1"
+        ]
+      ],
+      "T_parent_child_at_q0": [
+        [
+          -3.673205103346574e-06,
+          -0.9999999999932537,
+          0.0,
+          -0.11257
+        ],
+        [
+          0.9999999999932537,
+          -3.673205103346574e-06,
+          0.0,
+          -0.028
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "reconstruction_formula": "T_parent_child(q) = T_parent_joint_static @ T_motion(q) @ T_joint_child_static",
+      "input_symbol_q_rad": "q_elbow_flex_rad"
+    },
+    "wrist_flex": {
+      "name": "wrist_flex",
+      "type": "revolute",
+      "parent_link": "lower_arm_link",
+      "child_link": "wrist_link",
+      "axis_joint_frame": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "axis_raw": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "limit_raw": {
+        "lower": -1.65806,
+        "upper": 1.65806,
+        "unit": "radians"
+      },
+      "limit_as_rad": {
+        "lower": -1.65806,
+        "upper": 1.65806
+      },
+      "local_frames": {
+        "localPos0": [
+          -0.1349,
+          0.0052,
+          0.0
+        ],
+        "localRot0_wxyz": [
+          0.7071054825112364,
+          0.0,
+          0.0,
+          -0.7071080798594737
+        ],
+        "localRot0_rpy": [
+          0.0,
+          0.0,
+          -1.5708
+        ],
+        "localPos1": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRot1_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "T_parent_joint_static": [
+        [
+          -3.673205103346574e-06,
+          0.9999999999932537,
+          0.0,
+          -0.1349
+        ],
+        [
+          -0.9999999999932537,
+          -3.673205103346574e-06,
+          0.0,
+          0.0052
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_joint_child_static": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_motion_symbolic": [
+        [
+          "(0*0)*(1-cos(q_wrist_flex_rad)) + cos(q_wrist_flex_rad)",
+          "(0*0)*(1-cos(q_wrist_flex_rad)) - (1)*sin(q_wrist_flex_rad)",
+          "(0*1)*(1-cos(q_wrist_flex_rad)) + (0)*sin(q_wrist_flex_rad)",
+          "0"
+        ],
+        [
+          "(0*0)*(1-cos(q_wrist_flex_rad)) + (1)*sin(q_wrist_flex_rad)",
+          "(0*0)*(1-cos(q_wrist_flex_rad)) + cos(q_wrist_flex_rad)",
+          "(0*1)*(1-cos(q_wrist_flex_rad)) - (0)*sin(q_wrist_flex_rad)",
+          "0"
+        ],
+        [
+          "(1*0)*(1-cos(q_wrist_flex_rad)) - (0)*sin(q_wrist_flex_rad)",
+          "(1*0)*(1-cos(q_wrist_flex_rad)) + (0)*sin(q_wrist_flex_rad)",
+          "(1*1)*(1-cos(q_wrist_flex_rad)) + cos(q_wrist_flex_rad)",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "1"
+        ]
+      ],
+      "T_parent_child_at_q0": [
+        [
+          -3.673205103346574e-06,
+          0.9999999999932537,
+          0.0,
+          -0.1349
+        ],
+        [
+          -0.9999999999932537,
+          -3.673205103346574e-06,
+          0.0,
+          0.0052
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "reconstruction_formula": "T_parent_child(q) = T_parent_joint_static @ T_motion(q) @ T_joint_child_static",
+      "input_symbol_q_rad": "q_wrist_flex_rad"
+    },
+    "wrist_roll": {
+      "name": "wrist_roll",
+      "type": "revolute",
+      "parent_link": "wrist_link",
+      "child_link": "gripper_link",
+      "axis_joint_frame": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "axis_raw": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "limit_raw": {
+        "lower": -2.74385,
+        "upper": 2.84121,
+        "unit": "radians"
+      },
+      "limit_as_rad": {
+        "lower": -2.74385,
+        "upper": 2.84121
+      },
+      "local_frames": {
+        "localPos0": [
+          0.0,
+          -0.0611,
+          0.0181
+        ],
+        "localRot0_wxyz": [
+          0.01721007249293119,
+          -0.017208133464804664,
+          0.7068986593349474,
+          0.7068960170901372
+        ],
+        "localRot0_rpy": [
+          1.5708,
+          0.0486795,
+          3.14159
+        ],
+        "localPos1": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRot1_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "T_parent_joint_static": [
+        [
+          -0.9988153870948911,
+          -0.04866027635002569,
+          2.832328968791006e-06,
+          0.0
+        ],
+        [
+          2.6504463166479907e-06,
+          3.8023295160241124e-06,
+          0.9999999999892587,
+          -0.0611
+        ],
+        [
+          -0.04866027636027247,
+          0.9988153870916694,
+          -3.6688537771909548e-06,
+          0.0181
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_joint_child_static": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_motion_symbolic": [
+        [
+          "(0*0)*(1-cos(q_wrist_roll_rad)) + cos(q_wrist_roll_rad)",
+          "(0*0)*(1-cos(q_wrist_roll_rad)) - (1)*sin(q_wrist_roll_rad)",
+          "(0*1)*(1-cos(q_wrist_roll_rad)) + (0)*sin(q_wrist_roll_rad)",
+          "0"
+        ],
+        [
+          "(0*0)*(1-cos(q_wrist_roll_rad)) + (1)*sin(q_wrist_roll_rad)",
+          "(0*0)*(1-cos(q_wrist_roll_rad)) + cos(q_wrist_roll_rad)",
+          "(0*1)*(1-cos(q_wrist_roll_rad)) - (0)*sin(q_wrist_roll_rad)",
+          "0"
+        ],
+        [
+          "(1*0)*(1-cos(q_wrist_roll_rad)) - (0)*sin(q_wrist_roll_rad)",
+          "(1*0)*(1-cos(q_wrist_roll_rad)) + (0)*sin(q_wrist_roll_rad)",
+          "(1*1)*(1-cos(q_wrist_roll_rad)) + cos(q_wrist_roll_rad)",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "1"
+        ]
+      ],
+      "T_parent_child_at_q0": [
+        [
+          -0.9988153870948911,
+          -0.04866027635002569,
+          2.832328968791006e-06,
+          0.0
+        ],
+        [
+          2.6504463166479907e-06,
+          3.8023295160241124e-06,
+          0.9999999999892587,
+          -0.0611
+        ],
+        [
+          -0.04866027636027247,
+          0.9988153870916694,
+          -3.6688537771909548e-06,
+          0.0181
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "reconstruction_formula": "T_parent_child(q) = T_parent_joint_static @ T_motion(q) @ T_joint_child_static",
+      "input_symbol_q_rad": "q_wrist_roll_rad"
+    },
+    "gripper": {
+      "name": "gripper",
+      "type": "revolute",
+      "parent_link": "gripper_link",
+      "child_link": "moving_jaw_so101_v1_link",
+      "axis_joint_frame": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "axis_raw": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "limit_raw": {
+        "lower": -0.174533,
+        "upper": 1.74533,
+        "unit": "radians"
+      },
+      "limit_as_rad": {
+        "lower": -0.174533,
+        "upper": 1.74533
+      },
+      "local_frames": {
+        "localPos0": [
+          0.0202,
+          0.0188,
+          -0.0234
+        ],
+        "localRot0_wxyz": [
+          0.7071054825112362,
+          0.7071080798594734,
+          -1.8536205040112404e-08,
+          1.85362721265877e-08
+        ],
+        "localRot0_rpy": [
+          1.5708,
+          -5.24284e-08,
+          0.0
+        ],
+        "localPos1": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "localRot1_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "T_parent_joint_static": [
+        [
+          0.9999999999999987,
+          -5.242839999965148e-08,
+          1.9116473644030497e-13,
+          0.0202
+        ],
+        [
+          0.0,
+          -3.673205103346574e-06,
+          -0.9999999999932537,
+          0.0188
+        ],
+        [
+          5.2428399999999973e-08,
+          0.9999999999932524,
+          -3.673205103346569e-06,
+          -0.0234
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_joint_child_static": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "T_motion_symbolic": [
+        [
+          "(0*0)*(1-cos(q_gripper_rad)) + cos(q_gripper_rad)",
+          "(0*0)*(1-cos(q_gripper_rad)) - (1)*sin(q_gripper_rad)",
+          "(0*1)*(1-cos(q_gripper_rad)) + (0)*sin(q_gripper_rad)",
+          "0"
+        ],
+        [
+          "(0*0)*(1-cos(q_gripper_rad)) + (1)*sin(q_gripper_rad)",
+          "(0*0)*(1-cos(q_gripper_rad)) + cos(q_gripper_rad)",
+          "(0*1)*(1-cos(q_gripper_rad)) - (0)*sin(q_gripper_rad)",
+          "0"
+        ],
+        [
+          "(1*0)*(1-cos(q_gripper_rad)) - (0)*sin(q_gripper_rad)",
+          "(1*0)*(1-cos(q_gripper_rad)) + (0)*sin(q_gripper_rad)",
+          "(1*1)*(1-cos(q_gripper_rad)) + cos(q_gripper_rad)",
+          "0"
+        ],
+        [
+          "0",
+          "0",
+          "0",
+          "1"
+        ]
+      ],
+      "T_parent_child_at_q0": [
+        [
+          0.9999999999999987,
+          -5.242839999965148e-08,
+          1.9116473644030497e-13,
+          0.0202
+        ],
+        [
+          0.0,
+          -3.673205103346574e-06,
+          -0.9999999999932537,
+          0.0188
+        ],
+        [
+          5.2428399999999973e-08,
+          0.9999999999932524,
+          -3.673205103346569e-06,
+          -0.0234
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "reconstruction_formula": "T_parent_child(q) = T_parent_joint_static @ T_motion(q) @ T_joint_child_static",
+      "input_symbol_q_rad": "q_gripper_rad"
+    }
+  },
+  "fk_equations": {
+    "T_world_ee_left": "T_world_base_left @ T_shoulder_pan_parent_child(q_shoulder_pan_rad) @ T_shoulder_lift_parent_child(q_shoulder_lift_rad) @ T_elbow_flex_parent_child(q_elbow_flex_rad) @ T_wrist_flex_parent_child(q_wrist_flex_rad) @ T_wrist_roll_parent_child(q_wrist_roll_rad)",
+    "T_world_ee_right": "T_world_base_right @ T_shoulder_pan_parent_child(q_shoulder_pan_rad) @ T_shoulder_lift_parent_child(q_shoulder_lift_rad) @ T_elbow_flex_parent_child(q_elbow_flex_rad) @ T_wrist_flex_parent_child(q_wrist_flex_rad) @ T_wrist_roll_parent_child(q_wrist_roll_rad)",
+    "reconstruction_note": "For each joint j in ordered_joint_names_to_ee, use T_parent_child_j(q_j) = T_parent_joint_static @ T_motion_j(q_j) @ T_joint_child_static."
+  }
+}

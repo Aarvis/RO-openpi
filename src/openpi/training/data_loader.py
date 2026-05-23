@@ -405,8 +405,18 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
-    dataset = create_torch_dataset(data_config, action_horizon, model_config)
-    dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
+    if data_config.multi_dataset_specs:
+        import openpi.training.multi_dataset as _multi_dataset
+
+        dataset = _multi_dataset.create_multi_dataset(
+            data_config,
+            action_horizon=action_horizon,
+            model_config=model_config,
+            skip_norm_stats=skip_norm_stats,
+        )
+    else:
+        dataset = create_torch_dataset(data_config, action_horizon, model_config)
+        dataset = transform_dataset(dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     # Use TorchDataLoader for both frameworks
     # For PyTorch DDP, create DistributedSampler and divide batch size by world size

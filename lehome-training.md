@@ -299,6 +299,8 @@ unset CUDA_VISIBLE_DEVICES
 # or explicitly: export CUDA_VISIBLE_DEVICES=0,1,2,3
 export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/nvidia_icd.json
 
+find /usr /etc /opt /lib /lib64 -type f -name 'nvidia_icd.json' 2>/dev/null
+
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 unset CUDA_VISIBLE_DEVICES
 # or explicitly: export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -525,6 +527,7 @@ python -m parallel_eval \
   --record_policy_latent \
   --time-analytics \
   --use_random_seed
+  --allow
 
 
 uv run lehome-camera-cv-policy-tests/plot_test_continuity/plot_episode_continuity.py --episode-json /datadrive/LEHOME/lehome-challenge/Datasets/all_garment_type_exports/top_long_merged/chunk-000__file-000/json/episode_000150.json
@@ -597,12 +600,10 @@ python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py \
 
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://217.182.105.100:8000,ws://217.182.105.100:8001,ws://217.182.105.100:8002,ws://217.182.105.100:8003,ws://217.182.105.100:8004 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://57.128.84.121:8000,ws://57.128.84.121:8001,ws://57.128.84.121:8002,ws://57.128.84.121:8003 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 25  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://174.27.12.205:40184,ws://174.27.12.205:40168,ws://174.27.12.205:40192,ws://174.27.12.205:40194  --step_hz 30  --sim_device cpu  --device cpu --time-analytics 
-
---use_random_seed --allow_duplicate_garments
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 10  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://57.128.84.121:8000,ws://57.128.84.121:8001,ws://57.128.84.121:8002,ws://57.128.84.121:8003  --step_hz 30  --sim_device cpu  --device cpu --time-analytics --use_random_seed --allow_duplicate_garments 
 
 
 --record_episodes --record_all_episodes --record_inbuilt_step_rewards --record_policy_latent 
@@ -631,7 +632,19 @@ python -m parallel_eval   --headless   --enable_cameras   --garment_type custom 
 
 
 
+python .\Datasets\OnlineRL\1_frame_final_reward_per_chunk_Step.py `
+  "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\PPO_soft_launch_roll_out_2b" `
+  --output-dir "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\PPO_soft_launch_roll_out_2b_rewarded" `
+  --config "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\config.json" `
+  --workers 8 `
+  --overwrite
 
+python .\Datasets\OnlineRL\2_create_monte_carlo_all_rewarded_episodes.py `
+  "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\PPO_soft_launch_roll_out_2b_rewarded" `
+  --output-dir "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\PPO_soft_launch_roll_out_2b_rewarded_mc" `
+  --config "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\config.json" `
+  --workers 8 `
+  --overwrite
 
 
 

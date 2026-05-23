@@ -71,6 +71,35 @@ def _load_T_world_cam_cv(camera_cfg_path: Path) -> np.ndarray:
     return T
 
 
+def _load_camera_frame_z_flip_180(camera_cfg_path: Path) -> tuple[bool, np.ndarray]:
+    cfg = _load_json(camera_cfg_path)
+    flip_cfg = cfg.get("camera_frame_z_flip_180", {})
+    if flip_cfg is None:
+        return False, np.diag([-1.0, -1.0, 1.0]).astype(np.float64)
+    if not isinstance(flip_cfg, dict):
+        raise ValueError(f"camera_frame_z_flip_180 must be an object in: {camera_cfg_path}")
+
+    enabled = bool(flip_cfg.get("enabled", False))
+    R_flip = np.asarray(
+        flip_cfg.get(
+            "R_flip",
+            [
+                [-1.0, 0.0, 0.0],
+                [0.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0],
+            ],
+        ),
+        dtype=np.float64,
+    )
+    if R_flip.shape != (3, 3):
+        raise ValueError(f"camera_frame_z_flip_180.R_flip must be 3x3, got shape={R_flip.shape}")
+    return enabled, R_flip
+
+
+def _is_actuated_joint(joint_rec: dict[str, Any]) -> bool:
+    return str(joint_rec.get("type", "revolute")).lower() in ("revolute", "prismatic")
+
+
 def _axis_angle_rot(axis: np.ndarray, q_rad: float) -> np.ndarray:
     u = _normalize(axis.astype(np.float64))
     ux, uy, uz = u
@@ -227,7 +256,7 @@ def _compute_ee_transform(
         T_parent_joint = _mat4_from_any(rec["T_parent_joint_static"], f"{jn}.T_parent_joint_static")
         T_joint_child = _mat4_from_any(rec["T_joint_child_static"], f"{jn}.T_joint_child_static")
         axis_joint = rec.get("axis_joint_frame", [0.0, 0.0, 1.0])
-        q = float(joint_name_to_q[jn])
+        q = float(joint_name_to_q.get(jn, 0.0))
         T_motion = _motion_matrix(str(rec.get("type", "revolute")), axis_joint, q)
         T = T @ T_parent_joint @ T_motion @ T_joint_child
     return T
@@ -244,7 +273,6 @@ def _compute_fk_and_jacobian(
       T_world_ee: (4,4)
       J_spatial_6xn: top=linear, bottom=angular
     """
-    n = len(chain_joint_names)
     T = T_world_base.copy()
 
     joint_types: list[str] = []
@@ -265,17 +293,20 @@ def _compute_fk_and_jacobian(
         o_world_joint = T[:3, 3].copy()
         z_world = R_world_joint @ axis_joint
 
-        joint_types.append(str(rec.get("type", "revolute")).lower())
-        joint_axis_world.append(z_world)
-        joint_origin_world.append(o_world_joint)
+        joint_type = str(rec.get("type", "revolute")).lower()
+        if joint_type in ("revolute", "prismatic"):
+            joint_types.append(joint_type)
+            joint_axis_world.append(z_world)
+            joint_origin_world.append(o_world_joint)
 
-        q = float(joint_name_to_q[jn])
+        q = float(joint_name_to_q.get(jn, 0.0))
         T_motion = _motion_matrix(str(rec.get("type", "revolute")), axis_joint.tolist(), q)
         T = T @ T_motion @ T_joint_child
 
     T_world_ee = T
     p_ee = T_world_ee[:3, 3].copy()
 
+    n = len(joint_types)
     J = np.zeros((6, n), dtype=np.float64)
     for i in range(n):
         jt = joint_types[i]
@@ -329,9 +360,14 @@ class LehomeFKCameraCVTransformer:
         self._fk = _load_json(self._fk_path)
         self._joint_transforms = dict(self._fk["joint_transforms"])
         self._chain_joint_names = list(self._fk["ordered_chains"]["ordered_joint_names_to_ee"])
-        self._lower_lim_rad, self._upper_lim_rad = _read_joint_limits(self._chain_joint_names, self._joint_transforms)
+        self._actuated_chain_joint_names = [
+            jn for jn in self._chain_joint_names if _is_actuated_joint(self._joint_transforms[jn])
+        ]
+        self._lower_lim_rad, self._upper_lim_rad = _read_joint_limits(
+            self._actuated_chain_joint_names, self._joint_transforms
+        )
         self._name_to_idx = {name: i for i, name in enumerate(self._dataset_joint_order)}
-        missing = [n for n in self._chain_joint_names + ["gripper"] if n not in self._name_to_idx]
+        missing = [n for n in self._actuated_chain_joint_names + ["gripper"] if n not in self._name_to_idx]
         if missing:
             raise ValueError(f"dataset_joint_order missing required names: {missing}")
 
@@ -346,6 +382,10 @@ class LehomeFKCameraCVTransformer:
 
         self._T_world_cam_cv = _load_T_world_cam_cv(self._camera_cfg_path)
         self._T_cam_cv_world = np.linalg.inv(self._T_world_cam_cv)
+        self._camera_frame_z_flip_enabled, R_flip = _load_camera_frame_z_flip_180(self._camera_cfg_path)
+        self._T_camera_frame_z_flip = np.eye(4, dtype=np.float64)
+        self._T_camera_frame_z_flip[:3, :3] = R_flip
+        self._T_camera_frame_z_unflip = np.linalg.inv(self._T_camera_frame_z_flip)
 
     def state12_to_camera_pose16(self, state12: np.ndarray) -> np.ndarray:
         state = np.asarray(state12, dtype=np.float64).reshape(-1)
@@ -354,12 +394,17 @@ class LehomeFKCameraCVTransformer:
         left_pose8, right_pose8 = self._state12_to_world_pose8_pair(state)
         left_cam = self._world_pose8_to_cam_pose8(left_pose8)
         right_cam = self._world_pose8_to_cam_pose8(right_pose8)
-        return np.concatenate([left_cam, right_cam], axis=0).astype(np.float32)
+        pose16 = np.concatenate([left_cam, right_cam], axis=0)
+        if self._camera_frame_z_flip_enabled:
+            pose16 = self._apply_camera_frame_z_flip_pose16(pose16)
+        return pose16.astype(np.float32)
 
     def camera_pose16_to_world_pose16(self, pose16_camera_cv: np.ndarray) -> np.ndarray:
         pose16 = np.asarray(pose16_camera_cv, dtype=np.float64).reshape(-1)
         if pose16.size < 16:
             raise ValueError(f"Expected at least 16D camera action pose, got {pose16.size}")
+        if self._camera_frame_z_flip_enabled:
+            pose16 = self._apply_camera_frame_z_flip_pose16(pose16[:16], inverse=True)
         left_world = self._cam_pose8_to_world_pose8(pose16[:8])
         right_world = self._cam_pose8_to_world_pose8(pose16[8:16])
         return np.concatenate([left_world, right_world], axis=0).astype(np.float64)
@@ -436,8 +481,8 @@ class LehomeFKCameraCVTransformer:
             left_state = np.deg2rad(left_state)
             right_state = np.deg2rad(right_state)
 
-        left_map = {n: float(left_state[self._name_to_idx[n]]) for n in self._chain_joint_names}
-        right_map = {n: float(right_state[self._name_to_idx[n]]) for n in self._chain_joint_names}
+        left_map = {n: float(left_state[self._name_to_idx[n]]) for n in self._actuated_chain_joint_names}
+        right_map = {n: float(right_state[self._name_to_idx[n]]) for n in self._actuated_chain_joint_names}
         left_gripper = float(left_state[self._name_to_idx["gripper"]])
         right_gripper = float(right_state[self._name_to_idx["gripper"]])
 
@@ -467,6 +512,22 @@ class LehomeFKCameraCVTransformer:
         T_cam_ee = self._pose8_to_transform(pose8_cam)
         T_world_ee = self._T_world_cam_cv @ T_cam_ee
         return self._transform_to_pose8(T_world_ee, float(pose8_cam[7]))
+
+    def _apply_camera_frame_z_flip_pose8(self, pose8_cam: np.ndarray, *, inverse: bool = False) -> np.ndarray:
+        pose = np.asarray(pose8_cam, dtype=np.float64).reshape(8)
+        T_cam_ee = self._pose8_to_transform(pose)
+        T_flip = self._T_camera_frame_z_unflip if inverse else self._T_camera_frame_z_flip
+        return self._transform_to_pose8(T_flip @ T_cam_ee, float(pose[7]))
+
+    def _apply_camera_frame_z_flip_pose16(self, pose16_cam: np.ndarray, *, inverse: bool = False) -> np.ndarray:
+        pose = np.asarray(pose16_cam, dtype=np.float64).reshape(-1)
+        if pose.size < 16:
+            raise ValueError(f"Expected at least 16D camera pose, got {pose.size}")
+        left = self._apply_camera_frame_z_flip_pose8(pose[:8], inverse=inverse)
+        right = self._apply_camera_frame_z_flip_pose8(pose[8:16], inverse=inverse)
+        if pose.size == 16:
+            return np.concatenate([left, right], axis=0)
+        return np.concatenate([left, right, pose[16:]], axis=0)
 
     def _pose8_to_transform(self, pose8: np.ndarray) -> np.ndarray:
         v = np.asarray(pose8, dtype=np.float64).reshape(-1)
@@ -507,7 +568,7 @@ class LehomeFKCameraCVTransformer:
             raise ValueError(f"Expected 6D arm state for {arm}, got {q_arm.size}")
 
         name_to_idx = self._name_to_idx
-        q_chain = np.asarray([q_arm[name_to_idx[jn]] for jn in self._chain_joint_names], dtype=np.float64)
+        q_chain = np.asarray([q_arm[name_to_idx[jn]] for jn in self._actuated_chain_joint_names], dtype=np.float64)
         T_target = self._pose8_to_transform(target_pose8_world)
         q_chain_out = self._solve_dls_ik_chain(
             arm=arm,
@@ -527,10 +588,10 @@ class LehomeFKCameraCVTransformer:
         )
 
         q_out = q_arm.copy()
-        for j, jn in enumerate(self._chain_joint_names):
+        for j, jn in enumerate(self._actuated_chain_joint_names):
             q_out[name_to_idx[jn]] = q_chain_out[j]
 
-        if ("gripper" in name_to_idx) and ("gripper" not in self._chain_joint_names):
+        if ("gripper" in name_to_idx) and ("gripper" not in self._actuated_chain_joint_names):
             q_out[name_to_idx["gripper"]] = float(np.asarray(target_pose8_world, dtype=np.float64)[7])
         return q_out
 
@@ -560,9 +621,9 @@ class LehomeFKCameraCVTransformer:
             raise ValueError(f"Unsupported arm: {arm}")
 
         q = np.asarray(q_init_chain, dtype=np.float64).copy()
-        if q.size != len(self._chain_joint_names):
+        if q.size != len(self._actuated_chain_joint_names):
             raise ValueError(
-                f"q_init_chain size mismatch: got {q.size}, expected {len(self._chain_joint_names)}"
+                f"q_init_chain size mismatch: got {q.size}, expected {len(self._actuated_chain_joint_names)}"
             )
 
         ls_factors = [float(v) for v in line_search_alphas if float(v) > 0.0]
@@ -572,7 +633,7 @@ class LehomeFKCameraCVTransformer:
         tol_rot_rad = math.radians(float(tol_rot_deg))
         fallback_tol_factor = float(max(fallback_tol_factor, 1.0))
         for _ in range(int(max_iters)):
-            q_map = {jn: float(q[i]) for i, jn in enumerate(self._chain_joint_names)}
+            q_map = {jn: float(q[i]) for i, jn in enumerate(self._actuated_chain_joint_names)}
             T_cur, J = _compute_fk_and_jacobian(
                 T_world_base=T_world_base,
                 chain_joint_names=self._chain_joint_names,
@@ -608,7 +669,7 @@ class LehomeFKCameraCVTransformer:
                 if enforce_limits:
                     q_try = np.minimum(np.maximum(q_try, self._lower_lim_rad), self._upper_lim_rad)
 
-                q_try_map = {jn: float(q_try[i]) for i, jn in enumerate(self._chain_joint_names)}
+                q_try_map = {jn: float(q_try[i]) for i, jn in enumerate(self._actuated_chain_joint_names)}
                 T_try, _ = _compute_fk_and_jacobian(
                     T_world_base=T_world_base,
                     chain_joint_names=self._chain_joint_names,

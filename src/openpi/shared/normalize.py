@@ -27,7 +27,7 @@ class RunningStats:
         self._bin_edges = None
         self._num_quantile_bins = 5000  # for computing quantiles on the fly
 
-    def update(self, batch: np.ndarray, mask: np.ndarray | None = None) -> None:
+    def update(self, batch: np.ndarray, mask: np.ndarray | None = None, weights: np.ndarray | None = None) -> None:
         """
         Update the running statistics with a batch of vectors.
 
@@ -44,9 +44,18 @@ class RunningStats:
             if mask.shape != original_shape:
                 mask = np.broadcast_to(mask, original_shape)
             mask = mask.reshape(batch.shape)
+        if weights is None:
+            weights_arr = np.ones(batch.shape, dtype=np.float64)
+        else:
+            weights_arr = np.asarray(weights, dtype=np.float64)
+            if weights_arr.shape == original_shape[:-1]:
+                weights_arr = np.expand_dims(weights_arr, axis=-1)
+            if weights_arr.shape != original_shape:
+                weights_arr = np.broadcast_to(weights_arr, original_shape)
+            weights_arr = weights_arr.reshape(batch.shape)
 
         if self._count is None:
-            self._count = np.zeros(vector_length, dtype=np.int64)
+            self._count = np.zeros(vector_length, dtype=np.float64)
             self._mean = np.zeros(vector_length, dtype=np.float64)
             self._mean_of_squares = np.zeros(vector_length, dtype=np.float64)
             self._min = np.zeros(vector_length, dtype=np.float64)
@@ -58,12 +67,20 @@ class RunningStats:
 
         for i in range(vector_length):
             values = batch[mask[:, i], i]
+            value_weights = weights_arr[mask[:, i], i]
+            positive = value_weights > 0.0
+            values = values[positive]
+            value_weights = value_weights[positive]
             if values.size == 0:
                 continue
             values = np.asarray(values, dtype=np.float64)
+            value_weights = np.asarray(value_weights, dtype=np.float64)
+            weight_sum = float(np.sum(value_weights))
+            if weight_sum <= 0.0:
+                continue
             if self._count[i] == 0:
-                self._mean[i] = np.mean(values)
-                self._mean_of_squares[i] = np.mean(values**2)
+                self._mean[i] = np.average(values, weights=value_weights)
+                self._mean_of_squares[i] = np.average(values**2, weights=value_weights)
                 self._min[i] = np.min(values)
                 self._max[i] = np.max(values)
                 self._histograms[i] = np.zeros(self._num_quantile_bins)
@@ -72,8 +89,8 @@ class RunningStats:
                     self._max[i] + 1e-10,
                     self._num_quantile_bins + 1,
                 )
-                self._count[i] = values.size
-                self._update_histogram_dim(i, values)
+                self._count[i] = weight_sum
+                self._update_histogram_dim(i, values, value_weights)
                 continue
 
             new_max = np.max(values)
@@ -84,13 +101,13 @@ class RunningStats:
                 self._adjust_histogram_dim(i)
 
             old_count = self._count[i]
-            new_count = old_count + values.size
-            batch_mean = np.mean(values)
-            batch_mean_of_squares = np.mean(values**2)
-            self._mean[i] += (batch_mean - self._mean[i]) * (values.size / new_count)
-            self._mean_of_squares[i] += (batch_mean_of_squares - self._mean_of_squares[i]) * (values.size / new_count)
+            new_count = old_count + weight_sum
+            batch_mean = np.average(values, weights=value_weights)
+            batch_mean_of_squares = np.average(values**2, weights=value_weights)
+            self._mean[i] += (batch_mean - self._mean[i]) * (weight_sum / new_count)
+            self._mean_of_squares[i] += (batch_mean_of_squares - self._mean_of_squares[i]) * (weight_sum / new_count)
             self._count[i] = new_count
-            self._update_histogram_dim(i, values)
+            self._update_histogram_dim(i, values, value_weights)
 
     def get_statistics(self) -> NormStats:
         """
@@ -121,11 +138,11 @@ class RunningStats:
         self._histograms[dim] = new_hist
         self._bin_edges[dim] = new_edges
 
-    def _update_histogram_dim(self, dim: int, values: np.ndarray) -> None:
+    def _update_histogram_dim(self, dim: int, values: np.ndarray, weights: np.ndarray | None = None) -> None:
         """Update the histogram for a single dimension."""
         if self._bin_edges[dim] is None or self._histograms[dim] is None:
             return
-        hist, _ = np.histogram(values, bins=self._bin_edges[dim])
+        hist, _ = np.histogram(values, bins=self._bin_edges[dim], weights=weights)
         self._histograms[dim] += hist
 
     def _compute_quantiles(self, quantiles):

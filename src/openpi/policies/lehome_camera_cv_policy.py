@@ -14,6 +14,8 @@ from openpi.policies.lehome_camera_cv.fk_camera_transform import get_transformer
 _POLICY_DATA_DIR = (Path(__file__).resolve().parent / "lehome_camera_cv").resolve()
 _DEFAULT_FK_JSON_PATH = (_POLICY_DATA_DIR / "fk_from_usd_common.json").resolve()
 _DEFAULT_CAMERA_CFG_JSON_PATH = (_POLICY_DATA_DIR / "top_camera_config_runtime_cv.json").resolve()
+_DEFAULT_IMAGE_MASK_CSV = "base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb"
+_DEFAULT_FAST_IMAGE_MASK_CSV = "base_0_rgb,base_1_rgb,wrist_0_rgb"
 
 
 def make_lehome_camera_cv_example() -> dict:
@@ -53,6 +55,22 @@ def _parse_mask_indices(indices_csv: str, *, vector_length: int) -> np.ndarray:
             raise ValueError(f"Mask index {index} out of range for vector length {vector_length}")
         mask[index] = False
     return mask
+
+
+def _parse_valid_image_names(names: tuple[str, ...], valid_names_csv: str) -> tuple[np.bool_, ...]:
+    tokens = {token.strip() for token in str(valid_names_csv).split(",") if token.strip()}
+    if not tokens:
+        return tuple(np.False_ for _ in names)
+    unknown = sorted(tokens.difference(names))
+    if unknown:
+        raise ValueError(f"Unknown image mask names {unknown}; expected one of {names}")
+    return tuple(np.bool_(name in tokens) for name in names)
+
+
+def _valid_image_names_csv_for_model(valid_image_names_csv: str, model_type: _model.ModelType) -> str:
+    if model_type == _model.ModelType.PI0_FAST and valid_image_names_csv == _DEFAULT_IMAGE_MASK_CSV:
+        return _DEFAULT_FAST_IMAGE_MASK_CSV
+    return valid_image_names_csv
 
 
 def _canonicalize_quaternion(
@@ -146,6 +164,10 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
     pose_quat_order: str = "wxyz"
+    valid_image_names_csv: str = _DEFAULT_IMAGE_MASK_CSV
+    masked_state_indices_csv: str = ""
+    masked_action_indices_csv: str = ""
+    fill_value: float = 0.0
 
     def __post_init__(self) -> None:
         fk_path = Path(self.fk_json_path).resolve()
@@ -170,11 +192,17 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             case _model.ModelType.PI0 | _model.ModelType.PI05:
                 names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
                 images = (top_image, left_image, right_image)
-                image_masks = (np.True_, np.True_, np.True_)
+                image_masks = _parse_valid_image_names(
+                    names,
+                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                )
             case _model.ModelType.PI0_FAST:
                 names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
                 images = (top_image, left_image, right_image)
-                image_masks = (np.True_, np.True_, np.True_)
+                image_masks = _parse_valid_image_names(
+                    names,
+                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                )
             case _:
                 raise ValueError(f"Unsupported model type: {self.model_type}")
 
@@ -193,9 +221,13 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             transformer.state12_to_camera_pose16(raw_state),
             quat_order=str(self.pose_quat_order),
         ).astype(np.float32)
+        state_mask = _parse_mask_indices(self.masked_state_indices_csv, vector_length=16)
+        state_cam_cv = state_cam_cv.copy()
+        state_cam_cv[~state_mask] = float(self.fill_value)
 
         inputs = {
             "state": state_cam_cv,
+            "state_mask": state_mask.astype(bool),
             # Preserve original 12D joints for output-side IK post-processing.
             "state_joint": raw_state.astype(np.float32),
             "image": dict(zip(names, images, strict=True)),
@@ -234,7 +266,11 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
                 raise ValueError(
                     f"Unsupported actions shape {actions.shape}. Expected (12,) or (T,12)."
                 )
+            action_mask_1d = _parse_mask_indices(self.masked_action_indices_csv, vector_length=16)
+            actions_cam_cv = actions_cam_cv.copy()
+            actions_cam_cv[..., ~action_mask_1d] = float(self.fill_value)
             inputs["actions"] = actions_cam_cv
+            inputs["action_mask"] = np.broadcast_to(action_mask_1d, actions_cam_cv.shape).copy()
 
         if "prompt" in data:
             if isinstance(data["prompt"], bytes):
@@ -357,6 +393,9 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
     model_type: _model.ModelType
     state_dim: int = 16
     gripper_dim_indices_csv: str = "7,15"
+    valid_image_names_csv: str = _DEFAULT_IMAGE_MASK_CSV
+    masked_state_indices_csv: str = ""
+    masked_action_indices_csv: str = ""
     fill_value: float = 0.0
 
     def __call__(self, data: dict) -> dict:
@@ -368,11 +407,23 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
             case _model.ModelType.PI0 | _model.ModelType.PI05:
                 names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
                 images = (top_image, left_image, right_image)
-                image_masks = (np.True_, left_valid, right_valid)
+                configured_masks = _parse_valid_image_names(
+                    names,
+                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                )
+                image_masks = (
+                    configured_masks[0],
+                    np.bool_(configured_masks[1] and left_valid),
+                    np.bool_(configured_masks[2] and right_valid),
+                )
             case _model.ModelType.PI0_FAST:
                 names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
                 images = (top_image, np.zeros_like(top_image), right_image)
-                image_masks = (np.True_, np.True_, right_valid)
+                configured_masks = _parse_valid_image_names(
+                    names,
+                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                )
+                image_masks = (configured_masks[0], configured_masks[1], np.bool_(configured_masks[2] and right_valid))
             case _:
                 raise ValueError(f"Unsupported model type: {self.model_type}")
 
@@ -380,7 +431,12 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
         if state.size != self.state_dim:
             raise ValueError(f"Expected observation/state {self.state_dim}D, got {state.size}")
 
-        valid_dim_mask = _parse_mask_indices(self.gripper_dim_indices_csv, vector_length=self.state_dim)
+        invalid_indices = ",".join(
+            token
+            for token in (str(self.gripper_dim_indices_csv) + "," + str(self.masked_state_indices_csv)).split(",")
+            if token.strip()
+        )
+        valid_dim_mask = _parse_mask_indices(invalid_indices, vector_length=self.state_dim)
         masked_state = state.copy()
         masked_state[~valid_dim_mask] = self.fill_value
 
@@ -408,10 +464,16 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
                     f"Unsupported actions shape {actions.shape}. Expected ({self.state_dim},) or (T,{self.state_dim})."
                 )
 
+            action_invalid_indices = ",".join(
+                token
+                for token in (str(self.gripper_dim_indices_csv) + "," + str(self.masked_action_indices_csv)).split(",")
+                if token.strip()
+            )
+            valid_action_mask = _parse_mask_indices(action_invalid_indices, vector_length=self.state_dim)
             masked_actions = actions.copy()
-            masked_actions[..., ~valid_dim_mask] = self.fill_value
+            masked_actions[..., ~valid_action_mask] = self.fill_value
             inputs["actions"] = masked_actions
-            inputs["action_mask"] = np.broadcast_to(valid_dim_mask, masked_actions.shape).copy()
+            inputs["action_mask"] = np.broadcast_to(valid_action_mask, masked_actions.shape).copy()
 
         if "prompt" in data:
             if isinstance(data["prompt"], bytes):

@@ -115,9 +115,20 @@ def create_weighted_torch_data_loader(
     seed: int = 0,
     framework: str = "jax",
 ) -> _data_loader.DataLoader[tuple[_model.Observation, _model.Actions]]:
-    base_dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
-    sample_weights = _extract_sample_weights(base_dataset)
-    dataset = _data_loader.transform_dataset(base_dataset, data_config, skip_norm_stats=skip_norm_stats)
+    if data_config.multi_dataset_specs:
+        import openpi.training.multi_dataset as _multi_dataset
+
+        dataset = _multi_dataset.create_multi_dataset(
+            data_config,
+            action_horizon=action_horizon,
+            model_config=model_config,
+            skip_norm_stats=skip_norm_stats,
+        )
+        sample_weights = torch.as_tensor(dataset.sample_weights, dtype=torch.double)
+    else:
+        base_dataset = _data_loader.create_torch_dataset(data_config, action_horizon, model_config)
+        sample_weights = _extract_sample_weights(base_dataset)
+        dataset = _data_loader.transform_dataset(base_dataset, data_config, skip_norm_stats=skip_norm_stats)
 
     if framework == "pytorch" and torch.distributed.is_initialized():
         raise NotImplementedError("Weighted sampling is not implemented for PyTorch distributed training.")

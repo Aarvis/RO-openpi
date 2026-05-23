@@ -29,6 +29,12 @@ hf upload huggingaccounttest/lehome_pretrain_all_garment_data \
   --repo-type dataset
 
 
+hf upload huggingaccounttest/lehome_pretrain_all_garment_round2_data `
+  "D:\Lehome-Dataset\lehome_round_2_dataset\pretrain_dataset\pretrain_lehome_all_garment_data_z180" `
+  . `
+  --repo-type dataset
+
+
 
 
 
@@ -114,6 +120,25 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
+mkdir -p ~/LEHOME/cache/openpi
+export OPENPI_DATA_HOME=~/LEHOME/cache/openpi
+export HF_HOME=~/LEHOME/.hf_home
+export HUGGINGFACE_HUB_CACHE=~/LEHOME/.hf_home/hub
+export HF_LEROBOT_HOME=~/LEHOME/.hf_home/lerobot
+unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p ~/LEHOME/tmp
+export HF_DATASETS_CACHE=~/LEHOME/.hf_home/datasets
+export TMPDIR=~/LEHOME/tmp
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0,1
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
 
 
 mkdir -p /mnt/persist/cache/openpi
@@ -128,7 +153,7 @@ export HF_DATASETS_CACHE=/mnt/persist/.hf_home/datasets
 export TMPDIR=/mnt/persist/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
@@ -167,9 +192,9 @@ huggingaccounttest/lehome_train_episodes
 
 
 
-hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_20_epoch \
+hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch \
   --repo-type model \
-  --local-dir "/mnt/persist/LEHOME/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_20_epoch"
+  --local-dir "/mnt/persist/LEHOME/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch"
 
 hf download huggingaccounttest/pretrain_base_all_garment_4_epoch \
   --repo-type model \
@@ -178,7 +203,7 @@ hf download huggingaccounttest/pretrain_base_all_garment_4_epoch \
 
 hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch \
   --repo-type model \
-  --local-dir "/workspace/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch" 
+  --local-dir "~/LEHOME/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch" 
 
 
 hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch \
@@ -370,3 +395,33 @@ uv run scripts/multi_best_sample_serve_policy.py \
   policy:checkpoint \
   --policy.config pi05_lehome_camera_cv_robot_finetune \
   --policy.dir "/workspace/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_4_epoch"
+
+
+
+  uv run scripts/multi_serve_policy.py \
+  --num-servers 2 \
+  --start-port 8002 \
+  --gpu-id 0 \
+  --total-gpu-fraction 0.93 \
+  --total-ppo-gpu-fraction 0.04 \
+  --xla-preallocate \
+  --stagger-seconds 2.0 \
+  --log-dir logs/multi_serve_policy_ppo_gpu1 \
+  -- \
+  policy:checkpoint \
+  --policy.config pi05_lehome_trained_vla_with_ppo_heads \
+  --policy.ppo-device cuda:0
+
+  uv run scripts/multi_serve_policy.py \
+  --num-servers 2 \
+  --start-port 8000 \
+  --gpu-id 1 \
+  --total-gpu-fraction 0.93 \
+  --total-ppo-gpu-fraction 0.04 \
+  --xla-preallocate \
+  --stagger-seconds 2.0 \
+  --log-dir logs/multi_serve_policy_ppo_gpu1 \
+  -- \
+  policy:checkpoint \
+  --policy.config pi05_lehome_trained_vla_with_ppo_heads \
+  --policy.ppo-device cuda:0

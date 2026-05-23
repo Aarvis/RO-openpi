@@ -94,6 +94,11 @@ class DataConfig:
     # If true, the dataset already stores full action chunks per sample and the loader must not
     # reconstruct them from future timesteps using delta_timestamps.
     prechunked_actions: bool = False
+    # Optional multi-dataset specs for custom co-training loaders.
+    multi_dataset_specs: Sequence[Any] = ()
+    multi_state_unit: str = "rad"
+    multi_pose_quat_order: str = "wxyz"
+    multi_action_dim: int = 16
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -203,6 +208,19 @@ class DataConfigFactory(abc.ABC):
         except FileNotFoundError:
             logging.info(f"Norm stats not found in {data_assets_dir}, skipping.")
         return None
+
+
+@dataclasses.dataclass(frozen=True)
+class LehomeCameraCVDatasetSpec:
+    repo_id: str
+    sample_weight: float = 1.0
+    apply_camera_cv_transform: bool = True
+    fk_json_path: str = str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH)
+    camera_config_json_path: str = str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH)
+    dataset_joint_order_csv: str = "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
+    valid_image_names_csv: str = "base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb"
+    masked_state_indices_csv: str = ""
+    masked_action_indices_csv: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -434,11 +452,13 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
     output_action_dim: int = 12
     state_unit: str = "rad"
     pose_quat_order: str = "wxyz"
+    fk_json_path: str = str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH)
+    camera_config_json_path: str = str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH)
     dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
     # damping: float = 0.05
-    damping: float = 0.03
+    damping: float = 0.05
     alpha: float = 1.0
     # line_search_alphas_csv: str = "1,0.5,0.25,0.05,1.5,2"
     line_search_alphas_csv: str = "1,0.5"
@@ -446,11 +466,11 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
     pos_weight: float = 1.0
     rot_weight: float = 1.0
     # max_iters: int = 80
-    max_iters: int = 80
+    max_iters: int = 20
     tol_pos_m: float = 1e-4
     tol_rot_deg: float = 0.2
     max_step_norm: float = 0.2
-    enforce_limits: bool = True
+    enforce_limits: bool = True #True
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -473,6 +493,8 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
             inputs=[
                 lehome_camera_cv_policy.LehomeCameraCVInputs(
                     model_type=model_config.model_type,
+                    fk_json_path=self.fk_json_path,
+                    camera_config_json_path=self.camera_config_json_path,
                     state_unit=self.state_unit,
                     pose_quat_order=self.pose_quat_order,
                     dataset_joint_order_csv=self.dataset_joint_order_csv,
@@ -482,6 +504,8 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
                 lehome_camera_cv_policy.LehomeCameraCVOutputs(
                     model_action_dim=self.action_dim,
                     output_action_dim=self.output_action_dim,
+                    fk_json_path=self.fk_json_path,
+                    camera_config_json_path=self.camera_config_json_path,
                     state_unit=self.state_unit,
                     pose_quat_order=self.pose_quat_order,
                     dataset_joint_order_csv=self.dataset_joint_order_csv,
@@ -529,6 +553,8 @@ class LeRobotLehomeCameraCVActionChunkedDataConfig(DataConfigFactory):
     output_action_dim: int = 12
     state_unit: str = "rad"
     pose_quat_order: str = "wxyz"
+    fk_json_path: str = str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH)
+    camera_config_json_path: str = str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH)
     dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
@@ -565,6 +591,8 @@ class LeRobotLehomeCameraCVActionChunkedDataConfig(DataConfigFactory):
             inputs=[
                 lehome_camera_cv_policy.LehomeCameraCVInputs(
                     model_type=model_config.model_type,
+                    fk_json_path=self.fk_json_path,
+                    camera_config_json_path=self.camera_config_json_path,
                     state_unit=self.state_unit,
                     pose_quat_order=self.pose_quat_order,
                     dataset_joint_order_csv=self.dataset_joint_order_csv,
@@ -574,6 +602,8 @@ class LeRobotLehomeCameraCVActionChunkedDataConfig(DataConfigFactory):
                 lehome_camera_cv_policy.LehomeCameraCVOutputs(
                     model_action_dim=self.action_dim,
                     output_action_dim=self.output_action_dim,
+                    fk_json_path=self.fk_json_path,
+                    camera_config_json_path=self.camera_config_json_path,
                     state_unit=self.state_unit,
                     pose_quat_order=self.pose_quat_order,
                     dataset_joint_order_csv=self.dataset_joint_order_csv,
@@ -608,6 +638,78 @@ class LeRobotLehomeCameraCVActionChunkedDataConfig(DataConfigFactory):
             model_transforms=model_transforms,
             prechunked_actions=True,
             action_sequence_keys=(),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
+    repo_id: str = "local/lehome_camera_cv_multi_cotrain"
+    dataset_specs: tuple[LehomeCameraCVDatasetSpec, ...] = (
+        LehomeCameraCVDatasetSpec(repo_id="local/lehome_cotrain_dataset_a", sample_weight=1.0),
+        LehomeCameraCVDatasetSpec(repo_id="local/lehome_cotrain_dataset_b", sample_weight=1.0),
+        LehomeCameraCVDatasetSpec(repo_id="local/lehome_cotrain_dataset_c", sample_weight=1.0),
+    )
+    action_dim: int = 16
+    output_action_dim: int = 12
+    state_unit: str = "rad"
+    pose_quat_order: str = "wxyz"
+    inference_fk_json_path: str = str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH)
+    inference_camera_config_json_path: str = str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH)
+    inference_dataset_joint_order_csv: str = (
+        "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
+    )
+    damping: float = 0.05
+    alpha: float = 1.0
+    line_search_alphas_csv: str = "1,0.5"
+    fallback_tol_factor: float = 1.1
+    pos_weight: float = 1.0
+    rot_weight: float = 1.0
+    max_iters: int = 50
+    tol_pos_m: float = 1e-4
+    tol_rot_deg: float = 0.2
+    max_step_norm: float = 0.2
+    enforce_limits: bool = True
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        if not self.dataset_specs:
+            raise ValueError("LeRobotLehomeCameraCVMultiCoTrainDataConfig requires at least one dataset spec.")
+
+        data_transforms = _transforms.Group(
+            outputs=[
+                lehome_camera_cv_policy.LehomeCameraCVOutputs(
+                    model_action_dim=self.action_dim,
+                    output_action_dim=self.output_action_dim,
+                    fk_json_path=self.inference_fk_json_path,
+                    camera_config_json_path=self.inference_camera_config_json_path,
+                    state_unit=self.state_unit,
+                    pose_quat_order=self.pose_quat_order,
+                    dataset_joint_order_csv=self.inference_dataset_joint_order_csv,
+                    damping=self.damping,
+                    alpha=self.alpha,
+                    line_search_alphas_csv=self.line_search_alphas_csv,
+                    fallback_tol_factor=self.fallback_tol_factor,
+                    pos_weight=self.pos_weight,
+                    rot_weight=self.rot_weight,
+                    max_iters=self.max_iters,
+                    tol_pos_m=self.tol_pos_m,
+                    tol_rot_deg=self.tol_rot_deg,
+                    max_step_norm=self.max_step_norm,
+                    enforce_limits=self.enforce_limits,
+                )
+            ],
+        )
+        base_config = self.create_base_config(assets_dirs, model_config)
+        return dataclasses.replace(
+            base_config,
+            data_transforms=data_transforms,
+            model_transforms=ModelTransformFactory()(model_config),
+            action_sequence_keys=("actions",),
+            multi_dataset_specs=self.dataset_specs,
+            multi_state_unit=self.state_unit,
+            multi_pose_quat_order=self.pose_quat_order,
+            multi_action_dim=self.action_dim,
+            use_quantile_norm=True,
         )
 
 
@@ -1184,6 +1286,8 @@ _CONFIGS = [
             output_action_dim=12,
             state_unit="rad",
             pose_quat_order="wxyz",
+            fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
+            camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
@@ -1206,6 +1310,82 @@ _CONFIGS = [
         # save_interval=670,
     ),
     TrainConfig(
+        name="pi05_lehome_camera_cv_multi_cotrain_robot_finetune",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=5, discrete_state_input=True),
+        num_workers=32,
+        run_val=False,
+        checkpoint_strategy="manual",
+        data=LeRobotLehomeCameraCVMultiCoTrainDataConfig(
+            repo_id="local/lehome_camera_cv_multi_cotrain",
+            base_config=DataConfig(prompt_from_task=True),
+            dataset_specs=(
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_cotrain_dataset_a", #human_pretrain
+                    sample_weight=1.6,
+                    apply_camera_cv_transform=False,
+                    fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
+                    camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb",
+                    masked_state_indices_csv="7,15",
+                    masked_action_indices_csv="2,3,4,5,6,7,10,11,12,13,14,15",
+                ),
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_cotrain_dataset_b", #robot_sim_dataset
+                    sample_weight=4.0,
+                    apply_camera_cv_transform=True,
+                    fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common"),
+                    camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_top_camera_config_runtime_cv.json"),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
+                    masked_state_indices_csv="",
+                    masked_action_indices_csv="",
+                ),
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_cotrain_dataset_c", #robot_real_dataset
+                    sample_weight=8.0,
+                    apply_camera_cv_transform=True,
+                    fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
+                    camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_top_camera_config_runtime_cv.json"),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
+                    masked_state_indices_csv="",
+                    masked_action_indices_csv="",
+                ),
+            ),
+            inference_fk_json_path=str(
+                pathlib.Path(__file__).resolve().parents[1]
+                / "policies"
+                / "lehome_camera_cv"
+                / "real_so101_fk_from_usd_common.json"
+            ),
+            inference_camera_config_json_path=str(
+                pathlib.Path(__file__).resolve().parents[1]
+                / "policies"
+                / "lehome_camera_cv"
+                / "real_top_camera_config_runtime_cv.json"
+            ),
+            inference_dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=220,
+            peak_lr=1e-4,
+            decay_steps=1800,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=1800,
+        batch_size=400,
+        log_interval=50,
+        save_steps=(900,),
+        keep_period=None,
+        max_to_keep=4,
+    ),
+    TrainConfig(
         # Inference-only rollout config: load a trained pi0.5 LeHome camera-CV
         # checkpoint as a frozen base policy and add PPO correction/value heads.
         name="pi05_lehome_trained_vla_with_ppo_heads",
@@ -1221,6 +1401,8 @@ _CONFIGS = [
             output_action_dim=12,
             state_unit="rad",
             pose_quat_order="wxyz",
+            fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
+            camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
