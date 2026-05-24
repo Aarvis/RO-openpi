@@ -67,6 +67,8 @@ def _input_transform_for_spec(
             valid_image_names_csv=spec.valid_image_names_csv,
             masked_state_indices_csv=spec.masked_state_indices_csv,
             masked_action_indices_csv=spec.masked_action_indices_csv,
+            target_image_height=spec.target_image_height,
+            target_image_width=spec.target_image_width,
         )
     return lehome_camera_cv_policy.LehomePrecomputed16DInputs(
         model_type=model_type,
@@ -75,6 +77,8 @@ def _input_transform_for_spec(
         valid_image_names_csv=spec.valid_image_names_csv,
         masked_state_indices_csv=spec.masked_state_indices_csv,
         masked_action_indices_csv=spec.masked_action_indices_csv,
+        target_image_height=spec.target_image_height,
+        target_image_width=spec.target_image_width,
     )
 
 

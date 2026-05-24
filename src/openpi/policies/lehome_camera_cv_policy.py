@@ -5,6 +5,7 @@ from pathlib import Path
 
 import einops
 import numpy as np
+from PIL import Image
 
 from openpi import transforms
 from openpi.models import model as _model
@@ -16,6 +17,7 @@ _DEFAULT_FK_JSON_PATH = (_POLICY_DATA_DIR / "fk_from_usd_common.json").resolve()
 _DEFAULT_CAMERA_CFG_JSON_PATH = (_POLICY_DATA_DIR / "top_camera_config_runtime_cv.json").resolve()
 _DEFAULT_IMAGE_MASK_CSV = "base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb"
 _DEFAULT_FAST_IMAGE_MASK_CSV = "base_0_rgb,base_1_rgb,wrist_0_rgb"
+_PIL_BILINEAR = getattr(Image, "Resampling", Image).BILINEAR
 
 
 def make_lehome_camera_cv_example() -> dict:
@@ -29,19 +31,44 @@ def make_lehome_camera_cv_example() -> dict:
     }
 
 
-def _parse_image(image) -> np.ndarray:
+def _resize_image_exact(image: np.ndarray, *, target_height: int, target_width: int) -> np.ndarray:
+    if image.ndim != 3 or image.shape[-1] != 3:
+        raise ValueError(f"Expected HWC RGB image with 3 channels, got shape={image.shape}")
+    if image.dtype != np.uint8:
+        image = np.clip(image, 0, 255).astype(np.uint8)
+    resized = Image.fromarray(image).resize((target_width, target_height), resample=_PIL_BILINEAR)
+    return np.asarray(resized)
+
+
+def _parse_image(
+    image,
+    *,
+    target_height: int | None = None,
+    target_width: int | None = None,
+) -> np.ndarray:
     image = np.asarray(image)
     if np.issubdtype(image.dtype, np.floating):
         image = (255 * image).astype(np.uint8)
     if image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    if target_height is not None or target_width is not None:
+        if target_height is None or target_width is None:
+            raise ValueError("Both target_height and target_width must be provided together.")
+        if image.shape[:2] != (target_height, target_width):
+            image = _resize_image_exact(image, target_height=target_height, target_width=target_width)
     return image
 
 
-def _parse_optional_image(image, *, fallback: np.ndarray) -> tuple[np.ndarray, np.bool_]:
+def _parse_optional_image(
+    image,
+    *,
+    fallback: np.ndarray,
+    target_height: int | None = None,
+    target_width: int | None = None,
+) -> tuple[np.ndarray, np.bool_]:
     if image is None:
         return np.zeros_like(fallback), np.False_
-    return _parse_image(image), np.True_
+    return _parse_image(image, target_height=target_height, target_width=target_width), np.True_
 
 
 def _parse_mask_indices(indices_csv: str, *, vector_length: int) -> np.ndarray:
@@ -168,6 +195,8 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
     masked_state_indices_csv: str = ""
     masked_action_indices_csv: str = ""
     fill_value: float = 0.0
+    target_image_height: int | None = None
+    target_image_width: int | None = None
 
     def __post_init__(self) -> None:
         fk_path = Path(self.fk_json_path).resolve()
@@ -184,9 +213,21 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             )
 
     def __call__(self, data: dict) -> dict:
-        top_image = _parse_image(data["observation/top_rgb"])
-        left_image = _parse_image(data["observation/left_rgb"])
-        right_image = _parse_image(data["observation/right_rgb"])
+        top_image = _parse_image(
+            data["observation/top_rgb"],
+            target_height=self.target_image_height,
+            target_width=self.target_image_width,
+        )
+        left_image = _parse_image(
+            data["observation/left_rgb"],
+            target_height=self.target_image_height,
+            target_width=self.target_image_width,
+        )
+        right_image = _parse_image(
+            data["observation/right_rgb"],
+            target_height=self.target_image_height,
+            target_width=self.target_image_width,
+        )
 
         match self.model_type:
             case _model.ModelType.PI0 | _model.ModelType.PI05:
@@ -397,11 +438,27 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
     masked_state_indices_csv: str = ""
     masked_action_indices_csv: str = ""
     fill_value: float = 0.0
+    target_image_height: int | None = None
+    target_image_width: int | None = None
 
     def __call__(self, data: dict) -> dict:
-        top_image = _parse_image(data["observation/top_rgb"])
-        left_image, left_valid = _parse_optional_image(data.get("observation/left_rgb"), fallback=top_image)
-        right_image, right_valid = _parse_optional_image(data.get("observation/right_rgb"), fallback=top_image)
+        top_image = _parse_image(
+            data["observation/top_rgb"],
+            target_height=self.target_image_height,
+            target_width=self.target_image_width,
+        )
+        left_image, left_valid = _parse_optional_image(
+            data.get("observation/left_rgb"),
+            fallback=top_image,
+            target_height=self.target_image_height,
+            target_width=self.target_image_width,
+        )
+        right_image, right_valid = _parse_optional_image(
+            data.get("observation/right_rgb"),
+            fallback=top_image,
+            target_height=self.target_image_height,
+            target_width=self.target_image_width,
+        )
 
         match self.model_type:
             case _model.ModelType.PI0 | _model.ModelType.PI05:

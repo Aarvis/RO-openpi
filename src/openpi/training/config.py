@@ -221,6 +221,8 @@ class LehomeCameraCVDatasetSpec:
     valid_image_names_csv: str = "base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb"
     masked_state_indices_csv: str = ""
     masked_action_indices_csv: str = ""
+    target_image_height: int | None = None
+    target_image_width: int | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -658,6 +660,8 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
     inference_dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
+    inference_target_image_height: int | None = None
+    inference_target_image_width: int | None = None
     damping: float = 0.05
     alpha: float = 1.0
     line_search_alphas_csv: str = "1,0.5"
@@ -676,6 +680,18 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
             raise ValueError("LeRobotLehomeCameraCVMultiCoTrainDataConfig requires at least one dataset spec.")
 
         data_transforms = _transforms.Group(
+            inputs=[
+                lehome_camera_cv_policy.LehomeCameraCVInputs(
+                    model_type=model_config.model_type,
+                    fk_json_path=self.inference_fk_json_path,
+                    camera_config_json_path=self.inference_camera_config_json_path,
+                    state_unit=self.state_unit,
+                    pose_quat_order=self.pose_quat_order,
+                    dataset_joint_order_csv=self.inference_dataset_joint_order_csv,
+                    target_image_height=self.inference_target_image_height,
+                    target_image_width=self.inference_target_image_width,
+                )
+            ],
             outputs=[
                 lehome_camera_cv_policy.LehomeCameraCVOutputs(
                     model_action_dim=self.action_dim,
@@ -1329,6 +1345,8 @@ _CONFIGS = [
                     valid_image_names_csv="base_0_rgb",
                     masked_state_indices_csv="7,15",
                     masked_action_indices_csv="2,3,4,5,6,7,10,11,12,13,14,15",
+                    target_image_height=480,
+                    target_image_width=640,
                 ),
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_cotrain_dataset_b", #robot_sim_dataset
@@ -1340,6 +1358,8 @@ _CONFIGS = [
                     valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
                     masked_state_indices_csv="",
                     masked_action_indices_csv="",
+                    target_image_height=480,
+                    target_image_width=640,
                 ),
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_cotrain_dataset_c", #robot_real_dataset
@@ -1351,6 +1371,8 @@ _CONFIGS = [
                     valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
                     masked_state_indices_csv="",
                     masked_action_indices_csv="",
+                    target_image_height=480,
+                    target_image_width=640,
                 ),
             ),
             inference_fk_json_path=str(
@@ -1366,6 +1388,8 @@ _CONFIGS = [
                 / "real_top_camera_config_runtime_cv.json"
             ),
             inference_dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            inference_target_image_height=480,
+            inference_target_image_width=640,
             action_dim=16,
             output_action_dim=12,
             state_unit="rad",
