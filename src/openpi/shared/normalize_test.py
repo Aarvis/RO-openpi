@@ -41,3 +41,29 @@ def test_multiple_batch_dimensions():
 
     assert np.allclose(results.mean, expected_mean)
     assert np.allclose(results.std, expected_std)
+
+
+def test_multiple_batch_dimensions_with_per_sample_weights():
+    # Simulates action tensors shaped like (batch, horizon, dim) with one weight per sample.
+    arr = np.array(
+        [
+            [[1.0, 10.0], [3.0, 30.0]],
+            [[5.0, 50.0], [7.0, 70.0]],
+        ],
+        dtype=np.float64,
+    )  # shape (2, 2, 2)
+    weights = np.array([1.0, 3.0], dtype=np.float64)  # one weight per sample
+
+    stats = normalize.RunningStats()
+    stats.update(arr, weights=weights)
+    results = stats.get_statistics()
+
+    # Weight each sample equally across its horizon positions.
+    flattened = arr.reshape(-1, arr.shape[-1])
+    expanded_weights = np.repeat(weights, arr.shape[1])
+    expected_mean = np.average(flattened, axis=0, weights=expanded_weights)
+    expected_second_moment = np.average(flattened**2, axis=0, weights=expanded_weights)
+    expected_std = np.sqrt(np.maximum(0.0, expected_second_moment - expected_mean**2))
+
+    assert np.allclose(results.mean, expected_mean)
+    assert np.allclose(results.std, expected_std)

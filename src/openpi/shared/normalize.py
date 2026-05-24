@@ -27,6 +27,17 @@ class RunningStats:
         self._bin_edges = None
         self._num_quantile_bins = 5000  # for computing quantiles on the fly
 
+    @staticmethod
+    def _broadcast_weights(weights: np.ndarray, original_shape: tuple[int, ...]) -> np.ndarray:
+        if weights.shape == original_shape:
+            return weights
+        # Treat lower-rank weights as applying across leading batch dimensions and
+        # broadcast them across any remaining batch axes plus the final feature axis.
+        if weights.ndim <= len(original_shape):
+            expanded_shape = weights.shape + (1,) * (len(original_shape) - weights.ndim)
+            return np.broadcast_to(weights.reshape(expanded_shape), original_shape)
+        return np.broadcast_to(weights, original_shape)
+
     def update(self, batch: np.ndarray, mask: np.ndarray | None = None, weights: np.ndarray | None = None) -> None:
         """
         Update the running statistics with a batch of vectors.
@@ -48,10 +59,8 @@ class RunningStats:
             weights_arr = np.ones(batch.shape, dtype=np.float64)
         else:
             weights_arr = np.asarray(weights, dtype=np.float64)
-            if weights_arr.shape == original_shape[:-1]:
-                weights_arr = np.expand_dims(weights_arr, axis=-1)
             if weights_arr.shape != original_shape:
-                weights_arr = np.broadcast_to(weights_arr, original_shape)
+                weights_arr = self._broadcast_weights(weights_arr, original_shape)
             weights_arr = weights_arr.reshape(batch.shape)
 
         if self._count is None:
