@@ -128,6 +128,9 @@ class WeightedConcatDataset(_data_loader.Dataset):
     def __getitem__(self, index: SupportsIndex) -> dict:
         record, local_index = self._locate(index.__index__())
         sample = dict(record.dataset[local_index])
+        # `state_joint` is only needed by policy output post-processing. Training
+        # batches mix dataset specs, and not every spec can provide this key.
+        sample.pop("state_joint", None)
         sample["sample_weight"] = np.asarray(record.sample_weight, dtype=np.float32)
         return sample
 
