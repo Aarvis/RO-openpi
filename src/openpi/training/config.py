@@ -660,6 +660,7 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
     inference_dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
+    forced_prompt: str | None = None
     inference_target_image_height: int | None = None
     inference_target_image_width: int | None = None
     damping: float = 0.05
@@ -716,10 +717,16 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
             ],
         )
         base_config = self.create_base_config(assets_dirs, model_config)
+        model_transforms = ModelTransformFactory()(model_config)
+        if self.forced_prompt is not None:
+            model_transforms = _transforms.Group(
+                inputs=[_transforms.SetPrompt(self.forced_prompt), *model_transforms.inputs],
+                outputs=model_transforms.outputs,
+            )
         return dataclasses.replace(
             base_config,
             data_transforms=data_transforms,
-            model_transforms=ModelTransformFactory()(model_config),
+            model_transforms=model_transforms,
             action_sequence_keys=("actions",),
             multi_dataset_specs=self.dataset_specs,
             multi_state_unit=self.state_unit,
@@ -1333,10 +1340,10 @@ _CONFIGS = [
         checkpoint_strategy="manual",
         data=LeRobotLehomeCameraCVMultiCoTrainDataConfig(
             repo_id="local/lehome_camera_cv_multi_cotrain",
-            base_config=DataConfig(prompt_from_task=True),
+            base_config=DataConfig(prompt_from_task=False),
             dataset_specs=(
                 LehomeCameraCVDatasetSpec(
-                    repo_id="local/lehome_cotrain_dataset_a", #human_pretrain
+                    repo_id="local/lehome_pretrain_all_garment_round2_data", #human_pretrain
                     sample_weight=1.6,
                     apply_camera_cv_transform=False,
                     fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
@@ -1349,7 +1356,7 @@ _CONFIGS = [
                     target_image_width=640,
                 ),
                 LehomeCameraCVDatasetSpec(
-                    repo_id="local/lehome_cotrain_dataset_b", #robot_sim_dataset
+                    repo_id="local/lehome_robot_sim_all_garment_round2_data", #robot_sim_dataset
                     sample_weight=4.0,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common"),
@@ -1362,7 +1369,7 @@ _CONFIGS = [
                     target_image_width=640,
                 ),
                 LehomeCameraCVDatasetSpec(
-                    repo_id="local/lehome_cotrain_dataset_c", #robot_real_dataset
+                    repo_id="local/lehome_robot_real_all_garment_round2_data", #robot_real_dataset
                     sample_weight=8.0,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
@@ -1388,6 +1395,7 @@ _CONFIGS = [
                 / "real_top_camera_config_runtime_cv.json"
             ),
             inference_dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            forced_prompt="fold the garment on the table",
             inference_target_image_height=480,
             inference_target_image_width=640,
             action_dim=16,

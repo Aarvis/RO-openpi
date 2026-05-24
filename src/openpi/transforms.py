@@ -112,6 +112,16 @@ class InjectDefaultPrompt(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class SetPrompt(DataTransformFn):
+    prompt: str | None
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if self.prompt is not None:
+            data["prompt"] = np.asarray(self.prompt)
+        return data
+
+
+@dataclasses.dataclass(frozen=True)
 class Normalize(DataTransformFn):
     norm_stats: at.PyTree[NormStats] | None
     # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
