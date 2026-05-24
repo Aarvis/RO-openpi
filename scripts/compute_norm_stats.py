@@ -6,6 +6,7 @@ to the config assets directory.
 """
 
 import numpy as np
+import torch
 import tqdm
 from typing_extensions import Annotated
 import tyro
@@ -115,9 +116,17 @@ def main(
         dataset_len = len(dataset)
         if max_frames is not None:
             dataset_len = min(dataset_len, max_frames)
-        for start in tqdm.tqdm(range(0, dataset_len, config.batch_size), desc="Computing weighted stats"):
-            stop = min(start + config.batch_size, dataset_len)
-            batch = _data_loader._collate_fn([dataset[i] for i in range(start, stop)])
+            dataset = torch.utils.data.Subset(dataset, range(dataset_len))
+        data_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=config.batch_size,
+            num_workers=config.num_workers,
+            persistent_workers=config.num_workers > 0,
+            collate_fn=_data_loader._collate_fn,
+            drop_last=False,
+        )
+        num_batches = (dataset_len + config.batch_size - 1) // config.batch_size
+        for batch in tqdm.tqdm(data_loader, total=num_batches, desc="Computing weighted stats"):
             weights = np.asarray(batch["sample_weight"], dtype=np.float64)
             for key, mask_key in keys.items():
                 mask = None if mask_key not in batch else np.asarray(batch[mask_key])
