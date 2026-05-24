@@ -24,6 +24,15 @@ class RemoveStrings(transforms.DataTransformFn):
         return {k: v for k, v in x.items() if not np.issubdtype(np.asarray(v).dtype, np.str_)}
 
 
+def _collate_norm_stats_fn(items: list[dict]) -> dict:
+    keys = ("state", "state_mask", "actions", "action_mask", "sample_weight")
+    return {
+        key: np.stack([np.asarray(item[key]) for item in items], axis=0)
+        for key in keys
+        if all(key in item for item in items)
+    }
+
+
 def create_torch_dataloader(
     data_config: _config.DataConfig,
     action_horizon: int,
@@ -122,7 +131,7 @@ def main(
             batch_size=config.batch_size,
             num_workers=config.num_workers,
             persistent_workers=config.num_workers > 0,
-            collate_fn=_data_loader._collate_fn,
+            collate_fn=_collate_norm_stats_fn,
             drop_last=False,
         )
         num_batches = (dataset_len + config.batch_size - 1) // config.batch_size
