@@ -15,13 +15,14 @@ import openpi.training.data_loader as _data_loader
 import openpi.transforms as _transforms
 
 
-def _lehome_repack_transform(*, include_wrist_images: bool) -> _transforms.RepackTransform:
+def _lehome_repack_transform(*, include_wrist_images: bool, include_prompt: bool) -> _transforms.RepackTransform:
     structure = {
         "observation/top_rgb": "observation.images.top_rgb",
         "observation/state": "observation.state",
         "actions": "actions",
-        "prompt": "prompt",
     }
+    if include_prompt:
+        structure["prompt"] = "prompt"
     if include_wrist_images:
         structure.update(
             {
@@ -153,7 +154,10 @@ def create_multi_dataset(
             raise TypeError(f"Expected LehomeCameraCVDatasetSpec, got {type(spec)}")
 
         transforms: list[_transforms.DataTransformFn] = [
-            _lehome_repack_transform(include_wrist_images=spec.apply_camera_cv_transform),
+            _lehome_repack_transform(
+                include_wrist_images=spec.apply_camera_cv_transform,
+                include_prompt=data_config.prompt_from_task,
+            ),
             _input_transform_for_spec(
                 spec,
                 model_type=model_config.model_type,
