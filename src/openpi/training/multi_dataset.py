@@ -15,15 +15,21 @@ import openpi.training.data_loader as _data_loader
 import openpi.transforms as _transforms
 
 
-def _lehome_repack_transform(*, include_wrist_images: bool, include_prompt: bool) -> _transforms.RepackTransform:
+def _lehome_repack_transform(
+    *,
+    include_images: bool,
+    include_wrist_images: bool,
+    include_prompt: bool,
+) -> _transforms.RepackTransform:
     structure = {
-        "observation/top_rgb": "observation.images.top_rgb",
         "observation/state": "observation.state",
         "actions": "actions",
     }
+    if include_images:
+        structure["observation/top_rgb"] = "observation.images.top_rgb"
     if include_prompt:
         structure["prompt"] = "prompt"
-    if include_wrist_images:
+    if include_images and include_wrist_images:
         structure.update(
             {
                 "observation/left_rgb": "observation.images.left_rgb",
@@ -56,6 +62,7 @@ def _input_transform_for_spec(
     state_unit: str,
     pose_quat_order: str,
     action_dim: int,
+    include_images: bool = True,
 ) -> _transforms.DataTransformFn:
     if spec.apply_camera_cv_transform:
         return lehome_camera_cv_policy.LehomeCameraCVInputs(
@@ -70,6 +77,7 @@ def _input_transform_for_spec(
             masked_action_indices_csv=spec.masked_action_indices_csv,
             target_image_height=spec.target_image_height,
             target_image_width=spec.target_image_width,
+            include_images=include_images,
         )
     return lehome_camera_cv_policy.LehomePrecomputed16DInputs(
         model_type=model_type,
@@ -80,6 +88,7 @@ def _input_transform_for_spec(
         masked_action_indices_csv=spec.masked_action_indices_csv,
         target_image_height=spec.target_image_height,
         target_image_width=spec.target_image_width,
+        include_images=include_images,
     )
 
 
@@ -138,6 +147,7 @@ def create_multi_dataset(
     model_config: _model.BaseModelConfig,
     skip_norm_stats: bool = False,
     for_norm_stats: bool = False,
+    avoid_image_dims: bool = False,
 ) -> WeightedConcatDataset:
     norm_stats = {}
     if not for_norm_stats and not skip_norm_stats:
@@ -148,6 +158,7 @@ def create_multi_dataset(
             )
         norm_stats = data_config.norm_stats
 
+    include_images = not (for_norm_stats and avoid_image_dims)
     records = []
     for spec in data_config.multi_dataset_specs:
         if not isinstance(spec, _config.LehomeCameraCVDatasetSpec):
@@ -155,6 +166,7 @@ def create_multi_dataset(
 
         transforms: list[_transforms.DataTransformFn] = [
             _lehome_repack_transform(
+                include_images=include_images,
                 include_wrist_images=spec.apply_camera_cv_transform,
                 include_prompt=data_config.prompt_from_task,
             ),
@@ -164,6 +176,7 @@ def create_multi_dataset(
                 state_unit=data_config.multi_state_unit,
                 pose_quat_order=data_config.multi_pose_quat_order,
                 action_dim=data_config.multi_action_dim,
+                include_images=include_images,
             ),
         ]
         if not for_norm_stats:

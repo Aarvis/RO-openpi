@@ -197,6 +197,7 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
     fill_value: float = 0.0
     target_image_height: int | None = None
     target_image_width: int | None = None
+    include_images: bool = True
 
     def __post_init__(self) -> None:
         fk_path = Path(self.fk_json_path).resolve()
@@ -213,40 +214,6 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             )
 
     def __call__(self, data: dict) -> dict:
-        top_image = _parse_image(
-            data["observation/top_rgb"],
-            target_height=self.target_image_height,
-            target_width=self.target_image_width,
-        )
-        left_image = _parse_image(
-            data["observation/left_rgb"],
-            target_height=self.target_image_height,
-            target_width=self.target_image_width,
-        )
-        right_image = _parse_image(
-            data["observation/right_rgb"],
-            target_height=self.target_image_height,
-            target_width=self.target_image_width,
-        )
-
-        match self.model_type:
-            case _model.ModelType.PI0 | _model.ModelType.PI05:
-                names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
-                images = (top_image, left_image, right_image)
-                image_masks = _parse_valid_image_names(
-                    names,
-                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
-                )
-            case _model.ModelType.PI0_FAST:
-                names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
-                images = (top_image, left_image, right_image)
-                image_masks = _parse_valid_image_names(
-                    names,
-                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
-                )
-            case _:
-                raise ValueError(f"Unsupported model type: {self.model_type}")
-
         raw_state = np.asarray(data["observation/state"], dtype=np.float64).reshape(-1)
         if raw_state.size != 12:
             raise ValueError(f"Expected observation/state 12D, got {raw_state.size}")
@@ -271,9 +238,44 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
             "state_mask": state_mask.astype(bool),
             # Preserve original 12D joints for output-side IK post-processing.
             "state_joint": raw_state.astype(np.float32),
-            "image": dict(zip(names, images, strict=True)),
-            "image_mask": dict(zip(names, image_masks, strict=True)),
         }
+        if self.include_images:
+            top_image = _parse_image(
+                data["observation/top_rgb"],
+                target_height=self.target_image_height,
+                target_width=self.target_image_width,
+            )
+            left_image = _parse_image(
+                data["observation/left_rgb"],
+                target_height=self.target_image_height,
+                target_width=self.target_image_width,
+            )
+            right_image = _parse_image(
+                data["observation/right_rgb"],
+                target_height=self.target_image_height,
+                target_width=self.target_image_width,
+            )
+
+            match self.model_type:
+                case _model.ModelType.PI0 | _model.ModelType.PI05:
+                    names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+                    images = (top_image, left_image, right_image)
+                    image_masks = _parse_valid_image_names(
+                        names,
+                        _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                    )
+                case _model.ModelType.PI0_FAST:
+                    names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
+                    images = (top_image, left_image, right_image)
+                    image_masks = _parse_valid_image_names(
+                        names,
+                        _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                    )
+                case _:
+                    raise ValueError(f"Unsupported model type: {self.model_type}")
+
+            inputs["image"] = dict(zip(names, images, strict=True))
+            inputs["image_mask"] = dict(zip(names, image_masks, strict=True))
 
         if "actions" in data:
             # Training path: convert LeHome joint-space actions (12D per step) to
@@ -440,50 +442,9 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
     fill_value: float = 0.0
     target_image_height: int | None = None
     target_image_width: int | None = None
+    include_images: bool = True
 
     def __call__(self, data: dict) -> dict:
-        top_image = _parse_image(
-            data["observation/top_rgb"],
-            target_height=self.target_image_height,
-            target_width=self.target_image_width,
-        )
-        left_image, left_valid = _parse_optional_image(
-            data.get("observation/left_rgb"),
-            fallback=top_image,
-            target_height=self.target_image_height,
-            target_width=self.target_image_width,
-        )
-        right_image, right_valid = _parse_optional_image(
-            data.get("observation/right_rgb"),
-            fallback=top_image,
-            target_height=self.target_image_height,
-            target_width=self.target_image_width,
-        )
-
-        match self.model_type:
-            case _model.ModelType.PI0 | _model.ModelType.PI05:
-                names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
-                images = (top_image, left_image, right_image)
-                configured_masks = _parse_valid_image_names(
-                    names,
-                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
-                )
-                image_masks = (
-                    configured_masks[0],
-                    np.bool_(configured_masks[1] and left_valid),
-                    np.bool_(configured_masks[2] and right_valid),
-                )
-            case _model.ModelType.PI0_FAST:
-                names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
-                images = (top_image, np.zeros_like(top_image), right_image)
-                configured_masks = _parse_valid_image_names(
-                    names,
-                    _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
-                )
-                image_masks = (configured_masks[0], configured_masks[1], np.bool_(configured_masks[2] and right_valid))
-            case _:
-                raise ValueError(f"Unsupported model type: {self.model_type}")
-
         state = np.asarray(data["observation/state"], dtype=np.float32).reshape(-1)
         if state.size != self.state_dim:
             raise ValueError(f"Expected observation/state {self.state_dim}D, got {state.size}")
@@ -500,9 +461,56 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
         inputs = {
             "state": masked_state,
             "state_mask": valid_dim_mask.astype(bool),
-            "image": dict(zip(names, images, strict=True)),
-            "image_mask": dict(zip(names, image_masks, strict=True)),
         }
+        if self.include_images:
+            top_image = _parse_image(
+                data["observation/top_rgb"],
+                target_height=self.target_image_height,
+                target_width=self.target_image_width,
+            )
+            left_image, left_valid = _parse_optional_image(
+                data.get("observation/left_rgb"),
+                fallback=top_image,
+                target_height=self.target_image_height,
+                target_width=self.target_image_width,
+            )
+            right_image, right_valid = _parse_optional_image(
+                data.get("observation/right_rgb"),
+                fallback=top_image,
+                target_height=self.target_image_height,
+                target_width=self.target_image_width,
+            )
+
+            match self.model_type:
+                case _model.ModelType.PI0 | _model.ModelType.PI05:
+                    names = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+                    images = (top_image, left_image, right_image)
+                    configured_masks = _parse_valid_image_names(
+                        names,
+                        _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                    )
+                    image_masks = (
+                        configured_masks[0],
+                        np.bool_(configured_masks[1] and left_valid),
+                        np.bool_(configured_masks[2] and right_valid),
+                    )
+                case _model.ModelType.PI0_FAST:
+                    names = ("base_0_rgb", "base_1_rgb", "wrist_0_rgb")
+                    images = (top_image, np.zeros_like(top_image), right_image)
+                    configured_masks = _parse_valid_image_names(
+                        names,
+                        _valid_image_names_csv_for_model(self.valid_image_names_csv, self.model_type),
+                    )
+                    image_masks = (
+                        configured_masks[0],
+                        configured_masks[1],
+                        np.bool_(configured_masks[2] and right_valid),
+                    )
+                case _:
+                    raise ValueError(f"Unsupported model type: {self.model_type}")
+
+            inputs["image"] = dict(zip(names, images, strict=True))
+            inputs["image_mask"] = dict(zip(names, image_masks, strict=True))
 
         if "actions" in data:
             actions = np.asarray(data["actions"], dtype=np.float32)

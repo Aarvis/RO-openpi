@@ -7,6 +7,7 @@ to the config assets directory.
 
 import numpy as np
 import tqdm
+from typing_extensions import Annotated
 import tyro
 
 import openpi.models.model as _model
@@ -87,7 +88,17 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def main(
+    config_name: str,
+    max_frames: int | None = None,
+    avoid_image_dims: Annotated[
+        bool,
+        tyro.conf.arg(
+            aliases=("--avoid_image_dims",),
+            help="Skip image column selection and image parsing for supported norm-stats datasets.",
+        ),
+    ] = False,
+):
     config = _config.get_config(config_name)
     data_config = config.data.create(config.assets_dirs, config.model)
     keys = {"state": "state_mask", "actions": "action_mask"}
@@ -99,6 +110,7 @@ def main(config_name: str, max_frames: int | None = None):
             action_horizon=config.model.action_horizon,
             model_config=config.model,
             for_norm_stats=True,
+            avoid_image_dims=avoid_image_dims,
         )
         dataset_len = len(dataset)
         if max_frames is not None:
@@ -116,6 +128,12 @@ def main(config_name: str, max_frames: int | None = None):
         print(f"Writing stats to: {output_path}")
         normalize.save(output_path, norm_stats)
         return
+
+    if avoid_image_dims:
+        print(
+            "--avoid-image-dims/--avoid_image_dims is only implemented for multi_dataset_specs configs; "
+            "using current behavior."
+        )
 
     if data_config.rlds_data_dir is not None:
         data_loader, num_batches = create_rlds_dataloader(
