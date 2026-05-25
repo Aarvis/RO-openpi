@@ -43,6 +43,7 @@ def _resize_image_exact(image: np.ndarray, *, target_height: int, target_width: 
 def _parse_image(
     image,
     *,
+    rotate_180: bool = False,
     target_height: int | None = None,
     target_width: int | None = None,
 ) -> np.ndarray:
@@ -51,6 +52,8 @@ def _parse_image(
         image = (255 * image).astype(np.uint8)
     if image.shape[0] == 3:
         image = einops.rearrange(image, "c h w -> h w c")
+    if rotate_180:
+        image = np.rot90(image, 2, axes=(0, 1))
     if target_height is not None or target_width is not None:
         if target_height is None or target_width is None:
             raise ValueError("Both target_height and target_width must be provided together.")
@@ -198,6 +201,7 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
     target_image_height: int | None = None
     target_image_width: int | None = None
     include_images: bool = True
+    inference_mode: str = "real"
 
     def __post_init__(self) -> None:
         fk_path = Path(self.fk_json_path).resolve()
@@ -212,6 +216,8 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
                 "Required camera config JSON not found for LehomeCameraCVInputs: "
                 f"{cam_path}. Expected file in {_POLICY_DATA_DIR}."
             )
+        if self.inference_mode not in {"real", "sim"}:
+            raise ValueError(f"Unsupported inference_mode={self.inference_mode!r}. Expected 'real' or 'sim'.")
 
     def __call__(self, data: dict) -> dict:
         raw_state = np.asarray(data["observation/state"], dtype=np.float64).reshape(-1)
@@ -242,6 +248,7 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
         if self.include_images:
             top_image = _parse_image(
                 data["observation/top_rgb"],
+                rotate_180=self.inference_mode == "sim",
                 target_height=self.target_image_height,
                 target_width=self.target_image_width,
             )

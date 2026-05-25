@@ -29,10 +29,21 @@ hf upload huggingaccounttest/lehome_pretrain_all_garment_data \
   --repo-type dataset
 
 
-hf upload huggingaccounttest/lehome_pretrain_all_garment_round2_data `
-  "D:\Lehome-Dataset\lehome_round_2_dataset\pretrain_dataset\pretrain_lehome_all_garment_data_z180" `
+hf upload huggingaccounttest/lehome_robot_real_all_garment_round2_data `
+  "C:\Work\robot_real_ft_lehome_all_garment_data_episode_parquets_with_images" `
   . `
   --repo-type dataset
+
+hf upload-large-folder huggingaccounttest/lehome_pretrain_all_garment_round2_data `
+  "D:\Lehome-Dataset\lehome_round_2_dataset\pretrain_dataset\pretrain_lehome_all_garment_data_z180" `
+  --repo-type dataset `
+  --num-workers 16
+
+hf upload huggingaccounttest/lehome_robot_real_all_garment_round2_data `
+  "C:\Work\robot_real_ft_lehome_all_garment_data_episode_parquets_with_images" `
+  . `
+  --repo-type dataset `
+  --delete "*"
 
 
 
@@ -56,6 +67,15 @@ hf upload huggingaccounttest/robot_ft_only_with_state_all_garment_2_epoch \
   "/workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/robot_only_ft_with_state_all_garments/1350" \
   . \
   --repo-type model
+
+
+
+  hf upload huggingaccounttest/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_2_epoch\
+  "/home/ubuntu/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/lehome_multi_cotrain_weighted_4epochs/7500" \
+  . \
+  --repo-type model
+
+
 
 
 
@@ -132,12 +152,53 @@ export HF_DATASETS_CACHE=~/LEHOME/.hf_home/datasets
 export TMPDIR=~/LEHOME/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
+
+
+mkdir -p /dev/shm/cache/openpi
+export OPENPI_DATA_HOME=/dev/shm/cache/openpi
+export HF_HOME=/dev/shm/.hf_home
+export HUGGINGFACE_HUB_CACHE=/dev/shm/.hf_home/hub
+export HF_LEROBOT_HOME=/dev/shm/.hf_home/lerobot
+unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p /dev/shm/tmp
+export HF_DATASETS_CACHE=/dev/shm/.hf_home/datasets
+export TMPDIR=/dev/shm/tmp
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+
+mkdir -p /ephemeral/cache/openpi
+export OPENPI_DATA_HOME=/ephemeral/cache/openpi
+export HF_HOME=/ephemeral/.hf_home
+export HUGGINGFACE_HUB_CACHE=/ephemeral/.hf_home/hub
+export HF_LEROBOT_HOME=/ephemeral/.hf_home/lerobot
+unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p /ephemeral/tmp
+export HF_DATASETS_CACHE=/ephemeral/.hf_home/datasets
+export TMPDIR=/ephemeral/tmp
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
 
 
 
@@ -175,10 +236,15 @@ hf download huggingaccounttest/lehome_all_garment_data \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data"
 
 
-mkdir -p "${HF_LEROBOT_HOME}/local/lehome_all_garment_data_16d_pretrain" && \
-hf download huggingaccounttest/lehome_all_garment_data_16d_pretrain \
+mkdir -p "${HF_LEROBOT_HOME}/local/lehome_pretrain_all_garment_round2_data" && \
+hf download huggingaccounttest/lehome_robot_sim_all_garment_round2_data \
   --repo-type dataset \
-  --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data_16d_pretrain"
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_robot_sim_all_garment_round2_data"
+
+hf download huggingaccounttest/lehome_robot_real_all_garment_round2_data \
+  --repo-type dataset \
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_robot_real_all_garment_round2_data"
+
 
 mkdir -p "${HF_LEROBOT_HOME}/local/lehome_val_episodes" && \
 hf download huggingaccounttest/lehome_val_episodes \
@@ -192,9 +258,9 @@ huggingaccounttest/lehome_train_episodes
 
 
 
-hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch \
+hf download huggingaccounttest/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch \
   --repo-type model \
-  --local-dir "/mnt/persist/LEHOME/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch"
+  --local-dir "/home/ubuntu/LEHOME/lehome-openpi/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch"
 
 hf download huggingaccounttest/pretrain_base_all_garment_4_epoch \
   --repo-type model \

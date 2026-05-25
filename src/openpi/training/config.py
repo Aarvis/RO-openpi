@@ -660,6 +660,7 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
     inference_dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
+    inference_mode: Literal["real", "sim"] = "real"
     forced_prompt: str | None = None
     inference_target_image_height: int | None = None
     inference_target_image_width: int | None = None
@@ -689,6 +690,7 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
                     state_unit=self.state_unit,
                     pose_quat_order=self.pose_quat_order,
                     dataset_joint_order_csv=self.inference_dataset_joint_order_csv,
+                    inference_mode=self.inference_mode,
                     target_image_height=self.inference_target_image_height,
                     target_image_width=self.inference_target_image_width,
                 )
@@ -1395,6 +1397,7 @@ _CONFIGS = [
                 / "real_top_camera_config_runtime_cv.json"
             ),
             inference_dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            inference_mode="real",
             forced_prompt="fold the garment on the table",
             inference_target_image_height=480,
             inference_target_image_width=640,
