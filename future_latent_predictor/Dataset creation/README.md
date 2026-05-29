@@ -27,11 +27,40 @@ python "future_latent_predictor/Dataset creation/generate_future_latent_dataset.
   --params-path "./checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/my_exp/1800/params" \
   --output-dir "./future_latent_predictor/Dataset creation/output" \
   --future-offset 5 \
-  --batch-size 8 \
-  --shard-size 512
+  --batch-size 4 \
+  --shard-size 128
 ```
 
 If `--params-path` is omitted, the config's `weight_loader` is used.
+
+If `CUDA_VISIBLE_DEVICES` exposes multiple GPUs, the default `--num-gpu-workers auto`
+launches one subprocess per visible GPU and splits each source dataset into contiguous
+row ranges. For example:
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1
+
+python "future_latent_predictor/Dataset creation/generate_future_latent_dataset.py" \
+  --config-name pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --params-path "./checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/my_exp/1800/params" \
+  --output-dir "./future_latent_predictor/Dataset creation/output" \
+  --future-offset 5 \
+  --batch-size 4 \
+  --shard-size 128
+```
+
+To force single-GPU/current-process execution:
+
+```bash
+--num-gpu-workers 1
+```
+
+In multi-worker mode, parquet shards are named with the worker id:
+
+```text
+part-worker-000-000000.parquet
+part-worker-001-000000.parquet
+```
 
 Generated parquet rows include:
 

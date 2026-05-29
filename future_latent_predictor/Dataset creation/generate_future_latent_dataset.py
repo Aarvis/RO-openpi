@@ -4,13 +4,15 @@ import argparse
 import dataclasses
 import json
 import logging
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import flax.nnx as nnx
 import jax
 import numpy as np
-import polars as pl
 from tqdm.auto import tqdm
 
 import openpi.models.model as _model
@@ -55,11 +57,107 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-rows-per-dataset", type=int, default=None)
     parser.add_argument("--embedding-dtype", choices=("float16", "float32"), default="float16")
     parser.add_argument(
+        "--num-gpu-workers",
+        default="auto",
+        help=(
+            "Number of GPU worker subprocesses to launch. Use 'auto' to use all IDs in CUDA_VISIBLE_DEVICES. "
+            "Set to 1 to run in the current process."
+        ),
+    )
+    parser.add_argument("--worker-index", type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument("--num-workers", type=int, default=1, help=argparse.SUPPRESS)
+    parser.add_argument(
         "--skip-existing",
         action="store_true",
         help="Skip a dataset if its output directory already contains parquet shards.",
     )
     return parser.parse_args()
+
+
+def _visible_gpu_ids() -> list[str]:
+    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not visible or visible.strip() in {"", "-1"}:
+        return []
+    return [item.strip() for item in visible.split(",") if item.strip()]
+
+
+def _resolve_num_gpu_workers(value: str) -> int:
+    if value == "auto":
+        return max(1, len(_visible_gpu_ids()))
+    try:
+        workers = int(value)
+    except ValueError as exc:
+        raise ValueError(f"--num-gpu-workers must be 'auto' or an integer, got {value!r}") from exc
+    if workers < 1:
+        raise ValueError(f"--num-gpu-workers must be >= 1, got {workers}")
+    return workers
+
+
+def _child_command(args: argparse.Namespace, *, worker_index: int, num_workers: int) -> list[str]:
+    command = [
+        sys.executable,
+        __file__,
+        "--config-name",
+        args.config_name,
+        "--output-dir",
+        str(args.output_dir),
+        "--future-offset",
+        str(args.future_offset),
+        "--batch-size",
+        str(args.batch_size),
+        "--shard-size",
+        str(args.shard_size),
+        "--embedding-dtype",
+        args.embedding_dtype,
+        "--num-gpu-workers",
+        "1",
+        "--worker-index",
+        str(worker_index),
+        "--num-workers",
+        str(num_workers),
+    ]
+    if args.params_path is not None:
+        command.extend(["--params-path", args.params_path])
+    if args.max_rows_per_dataset is not None:
+        command.extend(["--max-rows-per-dataset", str(args.max_rows_per_dataset)])
+    if args.skip_existing:
+        command.append("--skip-existing")
+    return command
+
+
+def _maybe_launch_gpu_workers(args: argparse.Namespace) -> bool:
+    if args.num_workers != 1 or args.worker_index != 0:
+        return False
+
+    num_workers = _resolve_num_gpu_workers(str(args.num_gpu_workers))
+    if num_workers <= 1:
+        return False
+
+    visible_gpu_ids = _visible_gpu_ids()
+    if len(visible_gpu_ids) < num_workers:
+        raise ValueError(
+            f"Requested {num_workers} GPU workers but CUDA_VISIBLE_DEVICES exposes {len(visible_gpu_ids)} GPUs: "
+            f"{visible_gpu_ids}"
+        )
+
+    logging.info("Launching %s GPU workers across CUDA_VISIBLE_DEVICES=%s", num_workers, visible_gpu_ids)
+    processes = []
+    for worker_index, gpu_id in enumerate(visible_gpu_ids[:num_workers]):
+        env = os.environ.copy()
+        env["CUDA_VISIBLE_DEVICES"] = gpu_id
+        env.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+        command = _child_command(args, worker_index=worker_index, num_workers=num_workers)
+        logging.info("Starting worker %s/%s on GPU %s", worker_index, num_workers, gpu_id)
+        processes.append(subprocess.Popen(command, env=env))  # noqa: S603
+
+    failed = []
+    for worker_index, process in enumerate(processes):
+        return_code = process.wait()
+        if return_code != 0:
+            failed.append((worker_index, return_code))
+    if failed:
+        raise RuntimeError(f"Future latent GPU workers failed: {failed}")
+    return True
 
 
 def _load_model(config: _config.TrainConfig, *, params_path: str | None) -> _model.BaseModel:
@@ -255,6 +353,8 @@ def _row_from_embedding_pair(
 
 
 def _write_shard(rows: list[dict[str, Any]], output_path: Path) -> None:
+    import polars as pl
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame(rows).write_parquet(output_path)
 
@@ -278,6 +378,8 @@ def _write_dataset_metadata(
         "future_offset": args.future_offset,
         "num_rows": num_rows,
         "num_skipped": num_skipped,
+        "worker_index": args.worker_index,
+        "num_workers": args.num_workers,
         "embedding_dtype": args.embedding_dtype,
         "embedding_shape_per_camera": [256, 2048],
         "columns": [
@@ -291,7 +393,28 @@ def _write_dataset_metadata(
         "dataset_spec": dataclasses.asdict(spec),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "future_latent_metadata.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    metadata_name = (
+        "future_latent_metadata.json"
+        if args.num_workers == 1
+        else f"future_latent_metadata_worker-{args.worker_index:03d}.json"
+    )
+    (output_dir / metadata_name).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _row_range_for_worker(*, total_rows: int, worker_index: int, num_workers: int) -> tuple[int, int]:
+    if worker_index < 0 or worker_index >= num_workers:
+        raise ValueError(f"worker_index must be in [0, {num_workers}), got {worker_index}")
+    rows_per_worker = total_rows // num_workers
+    remainder = total_rows % num_workers
+    start = worker_index * rows_per_worker + min(worker_index, remainder)
+    end = start + rows_per_worker + (1 if worker_index < remainder else 0)
+    return start, end
+
+
+def _shard_path(output_dir: Path, *, shard_index: int, args: argparse.Namespace) -> Path:
+    if args.num_workers == 1:
+        return output_dir / f"part-{shard_index:06d}.parquet"
+    return output_dir / f"part-worker-{args.worker_index:03d}-{shard_index:06d}.parquet"
 
 
 def _process_spec(
@@ -316,9 +439,16 @@ def _process_spec(
     transforms = _transforms_for_spec(spec=spec, train_config=train_config, data_config=data_config)
 
     embedding_dtype = np.float16 if args.embedding_dtype == "float16" else np.float32
-    limit = len(raw_dataset)
+    total_rows = max(0, len(raw_dataset) - args.future_offset)
     if args.max_rows_per_dataset is not None:
-        limit = min(limit, args.max_rows_per_dataset + args.future_offset)
+        total_rows = min(total_rows, args.max_rows_per_dataset)
+    row_start, row_end = _row_range_for_worker(
+        total_rows=total_rows,
+        worker_index=args.worker_index,
+        num_workers=args.num_workers,
+    )
+    frame_start = row_start
+    frame_end = row_end + args.future_offset
 
     shard_rows: list[dict[str, Any]] = []
     frame_batch: list[tuple[dict[str, Any], dict[str, Any], int]] = []
@@ -354,14 +484,35 @@ def _process_spec(
             shard_rows.append(row)
             num_rows += 1
             if len(shard_rows) >= args.shard_size:
-                _write_shard(shard_rows, output_dir / f"part-{shard_index:06d}.parquet")
+                _write_shard(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
                 shard_rows = []
                 shard_index += 1
-            if args.max_rows_per_dataset is not None and num_rows >= args.max_rows_per_dataset:
+            if num_rows >= row_end - row_start:
                 return True
         return False
 
-    progress = tqdm(range(limit), desc=f"Embedding {spec.repo_id}", unit="frame")
+    if frame_start >= frame_end:
+        _write_dataset_metadata(
+            output_dir=output_dir,
+            train_config=train_config,
+            spec=spec,
+            args=args,
+            num_rows=0,
+            num_skipped=0,
+        )
+        logging.info(
+            "Worker %s/%s has no rows for %s",
+            args.worker_index,
+            args.num_workers,
+            spec.repo_id,
+        )
+        return
+
+    progress = tqdm(
+        range(frame_start, frame_end),
+        desc=f"Embedding {spec.repo_id} worker {args.worker_index}/{args.num_workers}",
+        unit="frame",
+    )
     stop = False
     for source_index in progress:
         try:
@@ -383,7 +534,7 @@ def _process_spec(
         flush_frame_batch()
 
     if shard_rows:
-        _write_shard(shard_rows, output_dir / f"part-{shard_index:06d}.parquet")
+        _write_shard(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
 
     _write_dataset_metadata(
         output_dir=output_dir,
@@ -393,12 +544,30 @@ def _process_spec(
         num_rows=num_rows,
         num_skipped=num_skipped,
     )
-    logging.info("Wrote %s rows for %s to %s; skipped=%s", num_rows, spec.repo_id, output_dir, num_skipped)
+    logging.info(
+        "Worker %s/%s wrote %s rows for %s to %s; skipped=%s; row_range=[%s,%s)",
+        args.worker_index,
+        args.num_workers,
+        num_rows,
+        spec.repo_id,
+        output_dir,
+        num_skipped,
+        row_start,
+        row_end,
+    )
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     args = parse_args()
+    if args.future_offset <= 0:
+        raise ValueError(f"--future-offset must be > 0, got {args.future_offset}")
+    if args.batch_size <= 0:
+        raise ValueError(f"--batch-size must be > 0, got {args.batch_size}")
+    if args.shard_size <= 0:
+        raise ValueError(f"--shard-size must be > 0, got {args.shard_size}")
+    if _maybe_launch_gpu_workers(args):
+        return
 
     train_config = _config.get_config(args.config_name)
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
