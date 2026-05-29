@@ -63,6 +63,14 @@ hf upload huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_
   --repo-type model
 
 
+hf upload huggingaccounttest/multidata_cotrain_base_human_sim_robot_polish1_3_epoch\
+  "/home/ubuntu/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/multicotrain_pretrain_base_real_sim_human_polish_1/4450" \
+  . \
+  --repo-type model
+
+
+
+
 hf upload huggingaccounttest/robot_ft_only_with_state_all_garment_2_epoch \
   "/workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/robot_only_ft_with_state_all_garments/1350" \
   . \
@@ -192,7 +200,7 @@ export HF_DATASETS_CACHE=/ephemeral/.hf_home/datasets
 export TMPDIR=/ephemeral/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
@@ -237,19 +245,28 @@ hf download huggingaccounttest/lehome_all_garment_data \
 
 
 mkdir -p "${HF_LEROBOT_HOME}/local/lehome_pretrain_all_garment_round2_data" && \
-hf download huggingaccounttest/lehome_robot_sim_all_garment_round2_data \
+hf download huggingaccounttest/lehome_pretrain_all_garment_round2_data \
   --repo-type dataset \
-  --local-dir "${HF_LEROBOT_HOME}/local/lehome_robot_sim_all_garment_round2_data"
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_pretrain_all_garment_round2_data"
 
 hf download huggingaccounttest/lehome_robot_real_all_garment_round2_data \
   --repo-type dataset \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_robot_real_all_garment_round2_data"
+
+hf download huggingaccounttest/lehome_robot_sim_all_garment_round2_data \
+  --repo-type dataset \
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_robot_sim_all_garment_round2_data"
 
 
 mkdir -p "${HF_LEROBOT_HOME}/local/lehome_val_episodes" && \
 hf download huggingaccounttest/lehome_val_episodes \
   --repo-type dataset \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_val_episodes"
+
+
+hf download lehome/dataset_challenge_real --repo-type dataset --local-dir "D:\Lehome-Dataset\robot_real_vanilla"
+
+
 
 
 huggingaccounttest/lehome_train_episodes
@@ -325,6 +342,13 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.96 uv run scripts/train.py \
   --fsdp-devices 1
 
 
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.98 uv run scripts/train_weighted.py \
+  pi05_lehome_camera_cv_multi_cotrain_robot_finetune \
+  --exp-name multicotrain_pretrain_base_real_sim_human_polish_1 \
+  --overwrite \
+  --fsdp-devices 1
+
+
 
 
 
@@ -338,8 +362,8 @@ uv run scripts/multi_serve_policy.py \
   --log-dir logs/multi_serve_policy \
   -- \
   policy:checkpoint \
-  --policy.config pi05_lehome_camera_cv_robot_finetune \
-  --policy.dir /workspace/lehome-openpi/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch
+  --policy.config pi05_lehome_camera_cv_multi_cotrain_robot_finetune \
+  --policy.dir /home/ubuntu/LEHOME/lehome-openpi/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch
 
 
 

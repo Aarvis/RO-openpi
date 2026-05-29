@@ -210,6 +210,9 @@ hf upload huggingaccounttest/mid-16epoch-OF-run \
   /workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_train_eval/latest_val/9000 \
   . \
   --repo-type model
+
+
+
   
 
 2) Run Eval
@@ -369,6 +372,30 @@ python -m parallel_eval \
   --policy_server_count 5 \
   --device cpu
 
+
+python -m round2_sim_inference_eval_test \
+  --headless \
+  --enable_cameras \
+  --policy_server_addr localhost:8080 \
+  --actions_per_chunk 5 \
+  --garment_type custom \
+  --num_episodes 5 \
+  --max_steps 600 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu
+
+python -m round2_sim_inference_eval_test \
+  --headless \
+  --enable_cameras \
+  --policy_server_addr http://146.115.17.138:62328 \
+  --actions_per_chunk 5 \
+  --garment_type top_long \
+  --num_episodes 5 \
+  --max_steps 600 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu
 
 
 
@@ -603,7 +630,9 @@ python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py \
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://57.128.84.121:8000,ws://57.128.84.121:8001,ws://57.128.84.121:8002,ws://57.128.84.121:8003 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 10  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://57.128.84.121:8000,ws://57.128.84.121:8001,ws://57.128.84.121:8002,ws://57.128.84.121:8003  --step_hz 30  --sim_device cpu  --device cpu --time-analytics --use_random_seed --allow_duplicate_garments 
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 4   --gpu_ids 0,1,2,3 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://69.19.136.171:8000,ws://69.19.136.171:8001,ws://69.19.136.171:8002,ws://69.19.136.171:8003  --step_hz 30  --sim_device cpu  --device cpu --time-analytics 
+
+--use_random_seed --allow_duplicate_garments 
 
 
 --record_episodes --record_all_episodes --record_inbuilt_step_rewards --record_policy_latent 
@@ -628,6 +657,19 @@ python -m parallel_eval   --headless   --enable_cameras   --garment_type custom 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://34.27.194.137:8003,ws://34.27.194.137:8004,ws://34.27.194.137:8000,ws://34.27.194.137:8001,ws://34.27.194.137:8002 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:5275,ws://20.150.146.205:8601 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+
+python -m round2_sim_inference_eval_test \
+  --headless \
+  --enable_cameras \
+  --policy_server_addr http://146.115.17.138:62328 \
+  --actions_per_chunk 5 \
+  --garment_type custom \
+  --num_episodes 5 \
+  --max_steps 600 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu
 
 
 

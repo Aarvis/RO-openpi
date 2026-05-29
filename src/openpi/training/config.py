@@ -214,6 +214,7 @@ class DataConfigFactory(abc.ABC):
 class LehomeCameraCVDatasetSpec:
     repo_id: str
     sample_weight: float = 1.0
+    include_in_future_latent_dataset: bool = True
     apply_camera_cv_transform: bool = True
     fk_json_path: str = str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH)
     camera_config_json_path: str = str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH)
@@ -1373,6 +1374,95 @@ _CONFIGS = [
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_robot_real_all_garment_round2_data", #robot_real_dataset
                     sample_weight=8.0,
+                    apply_camera_cv_transform=True,
+                    fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
+                    camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_top_camera_config_runtime_cv.json"),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
+                    masked_state_indices_csv="",
+                    masked_action_indices_csv="",
+                    target_image_height=480,
+                    target_image_width=640,
+                ),
+            ),
+            inference_fk_json_path=str(
+                pathlib.Path(__file__).resolve().parents[1]
+                / "policies"
+                / "lehome_camera_cv"
+                / "real_so101_fk_from_usd_common.json"
+            ),
+            inference_camera_config_json_path=str(
+                pathlib.Path(__file__).resolve().parents[1]
+                / "policies"
+                / "lehome_camera_cv"
+                / "real_top_camera_config_runtime_cv.json"
+            ),
+            inference_dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            inference_mode="real",
+            forced_prompt="fold the garment on the table",
+            inference_target_image_height=480,
+            inference_target_image_width=640,
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=220,
+            peak_lr=1e-4,
+            decay_steps=1800,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        num_train_steps=1800,
+        batch_size=400,
+        log_interval=50,
+        save_steps=(900,),
+        keep_period=None,
+        max_to_keep=4,
+    ),
+    TrainConfig(
+        name="pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent",
+        model=pi0_config.Pi0Config(pi05=True, action_horizon=5, discrete_state_input=True),
+        num_workers=32,
+        run_val=False,
+        checkpoint_strategy="manual",
+        data=LeRobotLehomeCameraCVMultiCoTrainDataConfig(
+            repo_id="local/lehome_camera_cv_multi_cotrain",
+            base_config=DataConfig(prompt_from_task=False),
+            dataset_specs=(
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_pretrain_all_garment_round2_data", #human_pretrain
+                    sample_weight=1.6,
+                    include_in_future_latent_dataset=True,
+                    apply_camera_cv_transform=False,
+                    fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
+                    camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb",
+                    masked_state_indices_csv="7,15",
+                    masked_action_indices_csv="2,3,4,5,6,7,10,11,12,13,14,15",
+                    target_image_height=480,
+                    target_image_width=640,
+                ),
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_robot_sim_all_garment_round2_data", #robot_sim_dataset
+                    sample_weight=4.0,
+                    include_in_future_latent_dataset=True,
+                    apply_camera_cv_transform=True,
+                    fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common"),
+                    camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_top_camera_config_runtime_cv.json"),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
+                    masked_state_indices_csv="",
+                    masked_action_indices_csv="",
+                    target_image_height=480,
+                    target_image_width=640,
+                ),
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_robot_real_all_garment_round2_data", #robot_real_dataset
+                    sample_weight=8.0,
+                    include_in_future_latent_dataset=True,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
                     camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_top_camera_config_runtime_cv.json"),
