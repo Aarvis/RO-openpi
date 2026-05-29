@@ -93,6 +93,10 @@ The exporter encodes each frame once and uses a sliding window to pair frame `t`
 with frame `t + future_offset`. This avoids recomputing future-frame embeddings
 for adjacent rows.
 
+Progress bars advance only after an embedding batch completes. Their postfix is
+refreshed by a heartbeat while JAX is compiling or a GPU batch is running, so
+the elapsed time and ETA include time spent inside long model calls.
+
 If a camera is masked invalid for an entire batch, the exporter skips that camera's
 image encoder call and writes zero placeholder bytes with the corresponding
 `*_embedding_valid=False` flag.

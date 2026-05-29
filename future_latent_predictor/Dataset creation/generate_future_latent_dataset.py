@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
 from typing import Any
 
 import flax.nnx as nnx
@@ -429,6 +431,17 @@ def _shard_path(output_dir: Path, *, shard_index: int, args: argparse.Namespace)
     return output_dir / f"part-worker-{args.worker_index:03d}-{shard_index:06d}.parquet"
 
 
+def _format_seconds(seconds: float | None) -> str:
+    if seconds is None or not np.isfinite(seconds):
+        return "?"
+    seconds = max(0, int(seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
 def _process_spec(
     *,
     train_config: _config.TrainConfig,
@@ -468,14 +481,21 @@ def _process_spec(
     num_rows = 0
     num_skipped = 0
     shard_index = 0
+    progress_total = frame_end - frame_start
+    progress_started_at = time.monotonic()
+    progress_phase = "starting"
 
     def flush_frame_batch() -> bool:
-        nonlocal frame_batch, num_rows, num_skipped, shard_index, shard_rows
+        nonlocal frame_batch, num_rows, num_skipped, shard_index, shard_rows, progress_phase
         if not frame_batch:
             return False
 
+        batch_len = len(frame_batch)
+        progress_phase = "encoding"
         entries = _extract_frame_embeddings(model=model, frames=frame_batch)
         frame_batch = []
+        progress.update(batch_len)
+        progress_phase = "pairing"
         for entry in entries:
             window.append(entry)
             if len(window) <= args.future_offset:
@@ -496,11 +516,16 @@ def _process_spec(
             shard_rows.append(row)
             num_rows += 1
             if len(shard_rows) >= args.shard_size:
+                progress_phase = "writing"
                 _write_shard(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
                 shard_rows = []
                 shard_index += 1
+                progress_phase = "pairing"
             if num_rows >= row_end - row_start:
+                _refresh_progress_postfix(refresh=True)
                 return True
+        _refresh_progress_postfix(refresh=False)
+        progress_phase = "reading"
         return False
 
     if frame_start >= frame_end:
@@ -520,33 +545,64 @@ def _process_spec(
         )
         return
 
+    def _progress_postfix() -> str:
+        elapsed = time.monotonic() - progress_started_at
+        fps = progress.n / elapsed if elapsed > 0 else 0.0
+        remaining = progress_total - progress.n
+        eta = remaining / fps if fps > 0 else None
+        return (
+            f"phase={progress_phase} rows={num_rows} skipped={num_skipped} "
+            f"elapsed={_format_seconds(elapsed)} fps={fps:.2f} eta={_format_seconds(eta)}"
+        )
+
+    def _refresh_progress_postfix(*, refresh: bool) -> None:
+        progress.set_postfix_str(_progress_postfix(), refresh=refresh)
+
     progress = tqdm(
-        range(frame_start, frame_end),
+        total=progress_total,
         desc=f"Embedding {spec.repo_id} worker {args.worker_index}/{args.num_workers}",
         unit="frame",
         position=args.worker_index,
         leave=True,
         dynamic_ncols=True,
     )
-    stop = False
-    for source_index in progress:
-        try:
-            raw = dict(raw_dataset[source_index])
-            item = _apply_transforms(raw, transforms)
-        except Exception as exc:  # noqa: BLE001
-            logging.warning("Skipping %s index %s: %s", spec.repo_id, source_index, exc)
-            num_skipped += 1
-            continue
+    heartbeat_stop = threading.Event()
 
-        frame_batch.append((raw, item, source_index))
-        if len(frame_batch) >= args.batch_size:
-            stop = flush_frame_batch()
-            progress.set_postfix(rows=num_rows, skipped=num_skipped)
-        if stop:
-            break
+    def heartbeat() -> None:
+        while not heartbeat_stop.wait(2.0):
+            _refresh_progress_postfix(refresh=True)
 
-    if not stop and frame_batch:
-        flush_frame_batch()
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+    heartbeat_thread.start()
+
+    try:
+        _refresh_progress_postfix(refresh=False)
+        progress_phase = "reading"
+        stop = False
+        for source_index in range(frame_start, frame_end):
+            try:
+                raw = dict(raw_dataset[source_index])
+                item = _apply_transforms(raw, transforms)
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Skipping %s index %s: %s", spec.repo_id, source_index, exc)
+                num_skipped += 1
+                progress.update(1)
+                _refresh_progress_postfix(refresh=False)
+                continue
+
+            frame_batch.append((raw, item, source_index))
+            if len(frame_batch) >= args.batch_size:
+                stop = flush_frame_batch()
+            if stop:
+                break
+
+        if not stop and frame_batch:
+            flush_frame_batch()
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=2.0)
+        _refresh_progress_postfix(refresh=True)
+        progress.close()
 
     if shard_rows:
         _write_shard(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
