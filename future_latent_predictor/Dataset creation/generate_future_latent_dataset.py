@@ -28,6 +28,7 @@ CAMERA_TO_COLUMN = {
     "right_wrist_0_rgb": "right_wrist",
     "left_wrist_0_rgb": "left_wrist",
 }
+EMBEDDING_SHAPE = (256, 2048)
 
 
 def parse_args() -> argparse.Namespace:
@@ -284,13 +285,9 @@ class _FrameEmbedding:
 
 
 @nnx.jit
-def _extract_image_embeddings(model: _model.BaseModel, observation: _model.Observation) -> dict[str, jax.Array]:
-    observation = _model.preprocess_observation(None, observation, train=False)
-    outputs = {}
-    for name in _model.IMAGE_KEYS:
-        image_tokens, _ = model.PaliGemma.img(observation.images[name], train=False)
-        outputs[name] = image_tokens
-    return outputs
+def _extract_one_image_embedding(model: _model.BaseModel, image: jax.Array) -> jax.Array:
+    image_tokens, _ = model.PaliGemma.img(image, train=False)
+    return image_tokens
 
 
 def _extract_frame_embeddings(
@@ -299,7 +296,22 @@ def _extract_frame_embeddings(
     frames: list[tuple[dict[str, Any], dict[str, Any], int]],
 ) -> list[_FrameEmbedding]:
     obs = _observation_from_items([item for _, item, _ in frames])
-    batch_embeddings = jax.device_get(_extract_image_embeddings(model, obs))
+    obs = _model.preprocess_observation(None, obs, train=False)
+    batch_embeddings = {}
+    for camera_name in CAMERA_TO_COLUMN:
+        camera_has_valid_image = any(
+            bool(np.asarray(item["image_mask"][camera_name]).item())
+            for _, item, _ in frames
+        )
+        if camera_has_valid_image:
+            batch_embeddings[camera_name] = jax.device_get(
+                _extract_one_image_embedding(model, obs.images[camera_name])
+            )
+        else:
+            batch_embeddings[camera_name] = np.zeros(
+                (len(frames), *EMBEDDING_SHAPE),
+                dtype=np.float32,
+            )
     entries = []
     for batch_index, (raw, item, source_index) in enumerate(frames):
         entries.append(

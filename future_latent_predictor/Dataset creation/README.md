@@ -92,3 +92,7 @@ Rows whose `t + future_offset` frame crosses an episode boundary are skipped.
 The exporter encodes each frame once and uses a sliding window to pair frame `t`
 with frame `t + future_offset`. This avoids recomputing future-frame embeddings
 for adjacent rows.
+
+If a camera is masked invalid for an entire batch, the exporter skips that camera's
+image encoder call and writes zero placeholder bytes with the corresponding
+`*_embedding_valid=False` flag.
