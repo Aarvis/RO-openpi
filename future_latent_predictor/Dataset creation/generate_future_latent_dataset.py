@@ -512,6 +512,9 @@ def _process_spec(
         range(frame_start, frame_end),
         desc=f"Embedding {spec.repo_id} worker {args.worker_index}/{args.num_workers}",
         unit="frame",
+        position=args.worker_index,
+        leave=True,
+        dynamic_ncols=True,
     )
     stop = False
     for source_index in progress:
