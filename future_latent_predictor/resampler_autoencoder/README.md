@@ -64,6 +64,29 @@ The default config uses batch size `2` per GPU and gradient accumulation `8`, so
 
 Each generated parquet row contributes up to two training samples: current `t` and future `t_5`.
 
+## Validation
+
+Validation is a deterministic parquet-shard split controlled by:
+
+```json
+"data": {
+  "val_fraction": 0.02
+},
+"training": {
+  "val_every_steps": 1000,
+  "val_batches": 100,
+  "val_num_workers": 0
+}
+```
+
+Validation rows are logged into `train_log.jsonl` with `"split": "val"` and metrics:
+
+```text
+val_loss
+val_mse
+val_cosine
+```
+
 ## Outputs
 
 The trainer writes:
@@ -77,4 +100,3 @@ train_log.jsonl                       scalar logs
 ```
 
 Use `resampler_encoder_latest.pt` when training the future latent predictor.
-

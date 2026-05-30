@@ -4,6 +4,7 @@
     "include_datasets": [],
     "cameras": ["top", "right_wrist", "left_wrist"],
     "embedding_shape": [256, 2048],
+    "val_fraction": 0.02,
     "shuffle_files": true,
     "shuffle_rows": true
   },
@@ -53,7 +54,10 @@
     "min_lr_ratio": 0.05,
     "clip_grad_norm": 1.0,
     "precision": "fp16",
-    "num_workers": 2,
+    "num_workers": 0,
+    "val_num_workers": 0,
+    "val_every_steps": 500,
+    "val_batches": 100,
     "pin_memory": true,
     "save_every_epochs": 1,
     "log_every_steps": 20,
@@ -67,4 +71,3 @@
     "token": ""
   }
 }
-

@@ -83,6 +83,33 @@ export WANDB_API_KEY="..."
 
 Only rank 0 logs to WandB.
 
+## Validation
+
+Validation is a deterministic parquet-shard split controlled by:
+
+```json
+"data": {
+  "val_fraction": 0.02
+},
+"training": {
+  "val_every_steps": 500,
+  "val_batches": 100,
+  "val_num_workers": 0
+}
+```
+
+Validation rows are logged into `train_log.jsonl` and WandB, when enabled, with `"split": "val"` and metrics:
+
+```text
+val_mse
+val_copy_mse
+val_mse_improvement
+val_cosine
+val_copy_cosine
+```
+
+The important validation metric is `val_mse_improvement`; it should stay positive.
+
 ## Outputs
 
 The trainer writes:
@@ -105,4 +132,3 @@ mse_improvement    1 - mse / copy_mse
 ```
 
 The future predictor is useful only when `mse_improvement` is positive and stable.
-

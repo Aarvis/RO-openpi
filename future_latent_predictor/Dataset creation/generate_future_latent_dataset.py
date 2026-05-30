@@ -74,6 +74,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip a dataset if its output directory already contains parquet shards.",
     )
+    parser.add_argument(
+        "--debug-start-image-count",
+        type=int,
+        default=5,
+        help=(
+            "Save transformed camera images for the first N frames on worker 0 for quick visual inspection. "
+            "Set to 0 to disable."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -125,6 +134,7 @@ def _child_command(args: argparse.Namespace, *, worker_index: int, num_workers: 
         command.extend(["--max-rows-per-dataset", str(args.max_rows_per_dataset)])
     if args.skip_existing:
         command.append("--skip-existing")
+    command.extend(["--debug-start-image-count", str(args.debug_start_image_count)])
     return command
 
 
@@ -442,6 +452,67 @@ def _format_seconds(seconds: float | None) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+def _image_to_uint8(image: Any) -> np.ndarray:
+    array = np.asarray(image)
+    if array.ndim == 4 and array.shape[0] == 1:
+        array = array[0]
+    if array.ndim == 3 and array.shape[0] in {1, 3, 4} and array.shape[-1] not in {1, 3, 4}:
+        array = np.moveaxis(array, 0, -1)
+    if array.ndim == 2:
+        array = np.repeat(array[..., None], 3, axis=-1)
+    if array.ndim != 3:
+        raise ValueError(f"Expected image with 2 or 3 dims, got shape {array.shape}")
+    if array.shape[-1] == 1:
+        array = np.repeat(array, 3, axis=-1)
+    if array.shape[-1] > 3:
+        array = array[..., :3]
+
+    if np.issubdtype(array.dtype, np.floating):
+        finite = array[np.isfinite(array)]
+        if finite.size == 0:
+            array = np.zeros_like(array, dtype=np.float32)
+        min_value = float(finite.min()) if finite.size else 0.0
+        max_value = float(finite.max()) if finite.size else 0.0
+        if min_value >= -1.1 and max_value <= 1.1 and min_value < 0.0:
+            array = (array + 1.0) * 127.5
+        elif min_value >= 0.0 and max_value <= 1.1:
+            array = array * 255.0
+        array = np.nan_to_num(array, nan=0.0, posinf=255.0, neginf=0.0)
+        array = np.clip(array, 0.0, 255.0).astype(np.uint8)
+    elif array.dtype != np.uint8:
+        array = np.clip(array, 0, 255).astype(np.uint8)
+    return array
+
+
+def _save_debug_start_images(
+    *,
+    item: dict[str, Any],
+    source_index: int,
+    spec: _config.LehomeCameraCVDatasetSpec,
+    args: argparse.Namespace,
+) -> None:
+    if args.worker_index != 0 or args.debug_start_image_count <= 0:
+        return
+    saved_count = getattr(args, "_debug_saved_start_image_count", 0)
+    if saved_count >= args.debug_start_image_count:
+        return
+
+    from PIL import Image
+
+    dataset_name = _safe_dataset_name(spec.repo_id)
+    debug_dir = args.output_dir / "debug_start_images" / dataset_name
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    frame_index = saved_count
+    for camera_name, column_name in CAMERA_TO_COLUMN.items():
+        image = _image_to_uint8(item["image"][camera_name])
+        valid = bool(np.asarray(item["image_mask"][camera_name]).item())
+        output_path = debug_dir / (
+            f"frame_{frame_index:03d}_source_{source_index:08d}_{column_name}_valid{int(valid)}.png"
+        )
+        Image.fromarray(image).save(output_path)
+    setattr(args, "_debug_saved_start_image_count", saved_count + 1)
+
+
 def _process_spec(
     *,
     train_config: _config.TrainConfig,
@@ -583,6 +654,7 @@ def _process_spec(
             try:
                 raw = dict(raw_dataset[source_index])
                 item = _apply_transforms(raw, transforms)
+                _save_debug_start_images(item=item, source_index=source_index, spec=spec, args=args)
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Skipping %s index %s: %s", spec.repo_id, source_index, exc)
                 num_skipped += 1
@@ -637,6 +709,9 @@ def main() -> None:
         raise ValueError(f"--batch-size must be > 0, got {args.batch_size}")
     if args.shard_size <= 0:
         raise ValueError(f"--shard-size must be > 0, got {args.shard_size}")
+    if args.debug_start_image_count < 0:
+        raise ValueError(f"--debug-start-image-count must be >= 0, got {args.debug_start_image_count}")
+    setattr(args, "_debug_saved_start_image_count", 0)
     if _maybe_launch_gpu_workers(args):
         return
 

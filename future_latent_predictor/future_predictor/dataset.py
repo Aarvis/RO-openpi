@@ -23,6 +23,8 @@ class FuturePredictionDataConfig:
     shuffle_files: bool = True
     shuffle_rows: bool = True
     seed: int = 42
+    split: str = "train"
+    val_fraction: float = 0.0
 
 
 class FuturePredictionDataset(IterableDataset):
@@ -38,9 +40,17 @@ class FuturePredictionDataset(IterableDataset):
         self.rank = rank
         self.world_size = world_size
         self.epoch = 0
-        self.files = find_parquet_files(config.data_root, config.include_datasets)
+        self.files = split_files(
+            find_parquet_files(config.data_root, config.include_datasets),
+            split=config.split,
+            val_fraction=config.val_fraction,
+            seed=config.seed,
+        )
         if not self.files:
-            raise FileNotFoundError(f"No parquet shards found under {config.data_root}")
+            raise FileNotFoundError(
+                f"No parquet shards found for split {config.split!r} under {config.data_root}. "
+                f"Check data.val_fraction and include_datasets."
+            )
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -96,9 +106,40 @@ def find_parquet_files(data_root: Path, include_datasets: tuple[str, ...]) -> li
     return sorted(files)
 
 
-def estimate_num_prediction_samples(*, data_root: Path, include_datasets: tuple[str, ...] = ()) -> int:
+def split_files(files: list[Path], *, split: str, val_fraction: float, seed: int) -> list[Path]:
+    if split not in {"train", "val"}:
+        raise ValueError(f"split must be 'train' or 'val', got {split!r}")
+    if not 0.0 <= val_fraction < 1.0:
+        raise ValueError(f"val_fraction must be in [0, 1), got {val_fraction}")
+    if val_fraction == 0.0 or len(files) < 2:
+        return files if split == "train" else []
+
+    shuffled = list(files)
+    random.Random(seed).shuffle(shuffled)
+    val_count = max(1, round(len(shuffled) * val_fraction))
+    val_count = min(val_count, len(shuffled) - 1)
+    val_files = set(shuffled[:val_count])
+    if split == "val":
+        return sorted(val_files)
+    return sorted(path for path in shuffled if path not in val_files)
+
+
+def estimate_num_prediction_samples(
+    *,
+    data_root: Path,
+    include_datasets: tuple[str, ...] = (),
+    split: str = "train",
+    val_fraction: float = 0.0,
+    seed: int = 42,
+) -> int:
     total_rows = 0
-    for path in find_parquet_files(data_root, include_datasets):
+    files = split_files(
+        find_parquet_files(data_root, include_datasets),
+        split=split,
+        val_fraction=val_fraction,
+        seed=seed,
+    )
+    for path in files:
         total_rows += pl.scan_parquet(path).select(pl.len()).collect().item()
     return total_rows
 

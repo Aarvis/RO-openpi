@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import json
 import math
 from pathlib import Path
@@ -80,7 +81,7 @@ def seed_everything(seed: int, rank: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def build_dataset_config(config: dict[str, Any]) -> GeneratedEmbeddingDataConfig:
+def build_dataset_config(config: dict[str, Any], *, split: str) -> GeneratedEmbeddingDataConfig:
     data = config["data"]
     return GeneratedEmbeddingDataConfig(
         data_root=Path(data["data_root"]),
@@ -92,6 +93,8 @@ def build_dataset_config(config: dict[str, Any]) -> GeneratedEmbeddingDataConfig
         shuffle_files=bool(data.get("shuffle_files", True)),
         shuffle_rows=bool(data.get("shuffle_rows", True)),
         seed=int(config["training"].get("seed", 42)),
+        split=split,
+        val_fraction=float(data.get("val_fraction", 0.0)),
     )
 
 
@@ -238,6 +241,65 @@ def write_log(output_dir: Path, payload: dict[str, Any]) -> None:
         file.write(json.dumps(payload) + "\n")
 
 
+def print_metric_line(payload: dict[str, Any]) -> None:
+    split = payload.get("split", "train")
+    if split == "val":
+        message = (
+            f"val step={payload['global_step']} epoch={payload['epoch'] + 1} "
+            f"loss={payload['val_loss']:.5f} mse={payload['val_mse']:.5f} "
+            f"cos={payload['val_cosine']:.5f}"
+        )
+    else:
+        message = (
+            f"train step={payload['global_step']} epoch={payload['epoch'] + 1} "
+            f"loss={payload['loss']:.5f} mse={payload['mse']:.5f} "
+            f"cos={payload['cosine']:.5f} lr={payload['lr']:.2e}"
+        )
+    tqdm.write(message)
+
+
+@torch.no_grad()
+def validate(
+    *,
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    val_batches: int,
+    use_fp16: bool,
+    mse_weight: float,
+    cosine_weight: float,
+) -> dict[str, float]:
+    model.eval()
+    iterator = iter(loader)
+    total_stats = {"loss": 0.0, "mse": 0.0, "cosine": 0.0}
+    completed_batches = 0
+
+    for _ in range(val_batches):
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            break
+        embeddings = batch["embeddings"].to(device=device, non_blocking=True)
+        valid = batch["valid"].to(device=device, non_blocking=True)
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=use_fp16):
+            outputs = model(embeddings)
+            _, stats = reconstruction_loss(
+                outputs["reconstructions"],
+                embeddings,
+                valid,
+                mse_weight=mse_weight,
+                cosine_weight=cosine_weight,
+            )
+        for key in total_stats:
+            total_stats[key] += stats[key]
+        completed_batches += 1
+
+    model.train()
+    if completed_batches == 0:
+        return {f"val_{key}": float("nan") for key in total_stats}
+    return {f"val_{key}": value / completed_batches for key, value in total_stats.items()}
+
+
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
@@ -257,7 +319,7 @@ def main() -> None:
     else:
         device = torch.device("cpu")
 
-    dataset_config = build_dataset_config(config)
+    dataset_config = build_dataset_config(config, split="train")
     dataset = GeneratedEmbeddingDataset(dataset_config, rank=rank, world_size=world_size)
     loader = DataLoader(
         dataset,
@@ -267,6 +329,20 @@ def main() -> None:
         persistent_workers=False,
         drop_last=True,
     )
+    val_loader = None
+    val_fraction = float(config["data"].get("val_fraction", 0.0))
+    if val_fraction > 0.0 and rank == 0:
+        val_config = build_dataset_config(config, split="val")
+        val_config = dataclasses.replace(val_config, shuffle_files=False, shuffle_rows=False)
+        val_dataset = GeneratedEmbeddingDataset(val_config, rank=0, world_size=1)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=int(training_config["batch_size_per_gpu"]),
+            num_workers=int(training_config.get("val_num_workers", 0)),
+            pin_memory=bool(training_config.get("pin_memory", True)) and device.type == "cuda",
+            persistent_workers=False,
+            drop_last=False,
+        )
 
     model = build_model(config).to(device)
     parameter_count = count_parameters(model)
@@ -287,6 +363,9 @@ def main() -> None:
             include_datasets=dataset_config.include_datasets,
             use_t=dataset_config.use_t,
             use_t_5=dataset_config.use_t_5,
+            split=dataset_config.split,
+            val_fraction=dataset_config.val_fraction,
+            seed=dataset_config.seed,
         )
         global_batch = (
             world_size
@@ -327,6 +406,8 @@ def main() -> None:
 
     grad_accum_steps = int(training_config.get("gradient_accumulation_steps", 1))
     log_every_steps = int(training_config.get("log_every_steps", 20))
+    val_every_steps = int(training_config.get("val_every_steps", 0))
+    val_batches = int(training_config.get("val_batches", 100))
     save_every_epochs = int(training_config.get("save_every_epochs", 1))
     mse_weight = float(config["loss"].get("mse_weight", 1.0))
     cosine_weight = float(config["loss"].get("cosine_weight", 0.1))
@@ -389,24 +470,38 @@ def main() -> None:
                 lr = scheduler.get_last_lr()[0]
                 elapsed = time.monotonic() - epoch_started_at
                 avg_loss = running_loss / max(1, step_in_epoch + 1)
-                progress.set_postfix(
-                    loss=f"{step_stats['loss']:.5f}",
-                    avg=f"{avg_loss:.5f}",
-                    mse=f"{step_stats['mse']:.5f}",
-                    cos=f"{step_stats['cosine']:.5f}",
-                    lr=f"{lr:.2e}",
+                log_payload = {
+                    "split": "train",
+                    "epoch": epoch,
+                    "step_in_epoch": step_in_epoch,
+                    "global_step": global_step,
+                    "elapsed_seconds": elapsed,
+                    "lr": lr,
+                    "avg_loss": avg_loss,
+                    **step_stats,
+                }
+                write_log(output_dir, log_payload)
+                print_metric_line(log_payload)
+            if rank == 0 and val_loader is not None and val_every_steps > 0 and global_step % val_every_steps == 0:
+                val_stats = validate(
+                    model=model.module if isinstance(model, DistributedDataParallel) else model,
+                    loader=val_loader,
+                    device=device,
+                    val_batches=val_batches,
+                    use_fp16=use_fp16,
+                    mse_weight=mse_weight,
+                    cosine_weight=cosine_weight,
                 )
-                write_log(
-                    output_dir,
-                    {
-                        "epoch": epoch,
-                        "step_in_epoch": step_in_epoch,
-                        "global_step": global_step,
-                        "elapsed_seconds": elapsed,
-                        "lr": lr,
-                        **step_stats,
-                    },
-                )
+                val_payload = {
+                    "split": "val",
+                    "epoch": epoch,
+                    "step_in_epoch": step_in_epoch,
+                    "global_step": global_step,
+                    "elapsed_seconds": time.monotonic() - epoch_started_at,
+                    **val_stats,
+                }
+                write_log(output_dir, val_payload)
+                print_metric_line(val_payload)
 
         if rank == 0 and ((epoch + 1) % save_every_epochs == 0 or epoch + 1 == int(training_config["epochs"])):
             save_checkpoint(
