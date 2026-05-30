@@ -110,6 +110,22 @@ val_copy_cosine
 
 The important validation metric is `val_mse_improvement`; it should stay positive.
 
+## Dataset Weights
+
+Set per-dataset sampling weights in the config:
+
+```json
+"data": {
+  "dataset_weights": {
+    "local__lehome_pretrain_all_garment_round2_data": 0.5,
+    "local__lehome_robot_sim_all_garment_round2_data": 2.0,
+    "local__lehome_robot_real_all_garment_round2_data": 8.0
+  }
+}
+```
+
+Weights are applied at the dataset-folder level. The same ratio is used for train and validation sampling after each dataset folder is split into train/val shards. Set a dataset weight to `0.0` to exclude it.
+
 ## Outputs
 
 The trainer writes:

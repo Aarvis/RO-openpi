@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import random
@@ -25,6 +26,7 @@ class FuturePredictionDataConfig:
     seed: int = 42
     split: str = "train"
     val_fraction: float = 0.0
+    dataset_weights: dict[str, float] | None = None
 
 
 class FuturePredictionDataset(IterableDataset):
@@ -40,17 +42,26 @@ class FuturePredictionDataset(IterableDataset):
         self.rank = rank
         self.world_size = world_size
         self.epoch = 0
+        all_files = find_parquet_files(config.data_root, config.include_datasets)
         self.files = split_files(
-            find_parquet_files(config.data_root, config.include_datasets),
+            all_files,
+            data_root=config.data_root,
             split=config.split,
             val_fraction=config.val_fraction,
             seed=config.seed,
+        )
+        self.weighted_file_groups = weighted_file_groups(
+            self.files,
+            data_root=config.data_root,
+            dataset_weights=config.dataset_weights or {},
         )
         if not self.files:
             raise FileNotFoundError(
                 f"No parquet shards found for split {config.split!r} under {config.data_root}. "
                 f"Check data.val_fraction and include_datasets."
             )
+        if config.dataset_weights and not self.weighted_file_groups:
+            raise ValueError("dataset_weights disabled every dataset; at least one dataset must have weight > 0.")
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
@@ -61,6 +72,10 @@ class FuturePredictionDataset(IterableDataset):
         num_data_workers = worker_info.num_workers if worker_info is not None else 1
         global_worker_id = self.rank * num_data_workers + worker_id
         num_global_workers = self.world_size * num_data_workers
+
+        if self.config.dataset_weights:
+            yield from self._iter_weighted_files(global_worker_id=global_worker_id)
+            return
 
         files = list(self.files)
         if self.config.shuffle_files:
@@ -76,6 +91,20 @@ class FuturePredictionDataset(IterableDataset):
 
         for file_index, path in enumerate(files):
             yield from self._iter_file(path, file_seed=self.config.seed + self.epoch * 1_000_003 + file_index)
+
+    def _iter_weighted_files(self, *, global_worker_id: int) -> Iterator[dict[str, torch.Tensor]]:
+        dataset_names = list(self.weighted_file_groups)
+        if not dataset_names:
+            return
+        weights = [self.weighted_file_groups[name]["weight"] for name in dataset_names]
+        rng = random.Random(self.config.seed + self.epoch * 1_000_003 + global_worker_id * 97_531)
+        file_counter = 0
+        while True:
+            dataset_name = rng.choices(dataset_names, weights=weights, k=1)[0]
+            files = self.weighted_file_groups[dataset_name]["files"]
+            path = rng.choice(files)
+            yield from self._iter_file(path, file_seed=rng.randint(0, 2**31 - 1) + file_counter)
+            file_counter += 1
 
     def _iter_file(self, path: Path, *, file_seed: int) -> Iterator[dict[str, torch.Tensor]]:
         frame = pl.read_parquet(path, columns=required_columns(self.config.cameras))
@@ -106,7 +135,7 @@ def find_parquet_files(data_root: Path, include_datasets: tuple[str, ...]) -> li
     return sorted(files)
 
 
-def split_files(files: list[Path], *, split: str, val_fraction: float, seed: int) -> list[Path]:
+def split_files(files: list[Path], *, data_root: Path, split: str, val_fraction: float, seed: int) -> list[Path]:
     if split not in {"train", "val"}:
         raise ValueError(f"split must be 'train' or 'val', got {split!r}")
     if not 0.0 <= val_fraction < 1.0:
@@ -114,14 +143,58 @@ def split_files(files: list[Path], *, split: str, val_fraction: float, seed: int
     if val_fraction == 0.0 or len(files) < 2:
         return files if split == "train" else []
 
-    shuffled = list(files)
-    random.Random(seed).shuffle(shuffled)
-    val_count = max(1, round(len(shuffled) * val_fraction))
-    val_count = min(val_count, len(shuffled) - 1)
-    val_files = set(shuffled[:val_count])
+    val_files: set[Path] = set()
+    for dataset_name, dataset_files in group_files_by_dataset(files, data_root=data_root).items():
+        if len(dataset_files) < 2:
+            continue
+        shuffled = list(dataset_files)
+        random.Random(seed + stable_int(dataset_name)).shuffle(shuffled)
+        val_count = max(1, round(len(shuffled) * val_fraction))
+        val_count = min(val_count, len(shuffled) - 1)
+        val_files.update(shuffled[:val_count])
     if split == "val":
         return sorted(val_files)
-    return sorted(path for path in shuffled if path not in val_files)
+    return sorted(path for path in files if path not in val_files)
+
+
+def dataset_name_for_file(path: Path, *, data_root: Path) -> str:
+    try:
+        relative = path.relative_to(data_root)
+    except ValueError:
+        return path.parent.name
+    if len(relative.parts) > 1:
+        return relative.parts[0]
+    return path.parent.name
+
+
+def group_files_by_dataset(files: list[Path], *, data_root: Path) -> dict[str, list[Path]]:
+    groups: dict[str, list[Path]] = defaultdict(list)
+    for path in files:
+        groups[dataset_name_for_file(path, data_root=data_root)].append(path)
+    return {name: sorted(paths) for name, paths in groups.items()}
+
+
+def stable_int(value: str) -> int:
+    total = 0
+    for index, character in enumerate(value):
+        total += (index + 1) * ord(character)
+    return total
+
+
+def weighted_file_groups(
+    files: list[Path],
+    *,
+    data_root: Path,
+    dataset_weights: dict[str, float],
+) -> dict[str, dict[str, object]]:
+    groups = group_files_by_dataset(files, data_root=data_root)
+    weighted_groups: dict[str, dict[str, object]] = {}
+    for dataset_name, dataset_files in groups.items():
+        weight = float(dataset_weights.get(dataset_name, dataset_weights.get(dataset_name.replace("__", "/"), 1.0)))
+        if weight <= 0.0:
+            continue
+        weighted_groups[dataset_name] = {"files": dataset_files, "weight": weight}
+    return weighted_groups
 
 
 def estimate_num_prediction_samples(
@@ -135,6 +208,7 @@ def estimate_num_prediction_samples(
     total_rows = 0
     files = split_files(
         find_parquet_files(data_root, include_datasets),
+        data_root=data_root,
         split=split,
         val_fraction=val_fraction,
         seed=seed,

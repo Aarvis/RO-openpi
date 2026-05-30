@@ -1,0 +1,25 @@
+{
+  "config_name": "pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent",
+  "embedding_dataset_roots": [
+    "/scratch/real_robot_generated_dataset/output"
+  ],
+  "output_dir": "/scratch/future_latent_runs/vla_future_latent_sidecar",
+  "resampler_checkpoint": "/scratch/future_latent_runs/resampler_autoencoder_v1/resampler_encoder_latest.pt",
+  "future_predictor_checkpoint": "/scratch/future_latent_runs/future_predictor_v1/future_predictor_latest.pt",
+  "future_offset": 5,
+  "cameras": [
+    "top",
+    "right_wrist",
+    "left_wrist"
+  ],
+  "batch_size": 64,
+  "shard_size": 1024,
+  "num_gpu_workers": "auto",
+  "dtype": "float16",
+  "precision": "fp16",
+  "skip_existing": true,
+  "duplicate_dataset_policy": "error",
+  "write_current_latents": false,
+  "max_rows_per_dataset": null
+}
+

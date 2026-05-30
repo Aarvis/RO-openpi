@@ -16,6 +16,33 @@ if TYPE_CHECKING:
 
 
 @dataclasses.dataclass(frozen=True)
+class FutureLatentConfig:
+    enabled: bool = False
+    num_cameras: int = 3
+    latent_tokens: int = 24
+    latent_dim: int = 512
+    adapter_hidden_dim: int = 1024
+    output_dim: int = 2048
+    predicted_latent_prob: float = 0.50
+    true_latent_prob: float = 0.30
+    dropped_latent_prob: float = 0.20
+    sidecar_root: str | None = None
+    resampler_checkpoint_path: str | None = None
+    future_predictor_checkpoint_path: str | None = None
+    freeze_image_encoder: bool = True
+    freeze_resampler: bool = True
+    freeze_future_predictor: bool = True
+
+    def __post_init__(self) -> None:
+        total = self.predicted_latent_prob + self.true_latent_prob + self.dropped_latent_prob
+        if self.enabled and abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                "Future latent mixture probabilities must sum to 1.0, got "
+                f"{self.predicted_latent_prob} + {self.true_latent_prob} + {self.dropped_latent_prob} = {total}"
+            )
+
+
+@dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
     paligemma_variant: _gemma.Variant = "gemma_2b"
@@ -31,6 +58,7 @@ class Pi0Config(_model.BaseModelConfig):
     pi05: bool = False
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
+    future_latent: FutureLatentConfig = dataclasses.field(default_factory=FutureLatentConfig)
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -71,6 +99,37 @@ class Pi0Config(_model.BaseModelConfig):
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
+                future_latent_pred=(
+                    jax.ShapeDtypeStruct(
+                        [
+                            batch_size,
+                            self.future_latent.num_cameras,
+                            self.future_latent.latent_tokens,
+                            self.future_latent.latent_dim,
+                        ],
+                        jnp.float32,
+                    )
+                    if self.future_latent.enabled
+                    else None
+                ),
+                future_latent_true=(
+                    jax.ShapeDtypeStruct(
+                        [
+                            batch_size,
+                            self.future_latent.num_cameras,
+                            self.future_latent.latent_tokens,
+                            self.future_latent.latent_dim,
+                        ],
+                        jnp.float32,
+                    )
+                    if self.future_latent.enabled
+                    else None
+                ),
+                future_latent_valid_mask=(
+                    jax.ShapeDtypeStruct([batch_size, self.future_latent.num_cameras], jnp.bool_)
+                    if self.future_latent.enabled
+                    else None
+                ),
             )
         action_spec = jax.ShapeDtypeStruct([batch_size, self.action_horizon, self.action_dim], jnp.float32)
 

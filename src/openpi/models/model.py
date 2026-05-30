@@ -97,6 +97,12 @@ class Observation(Generic[ArrayT]):
     # Optional mask for continuous action loss.
     action_mask: at.Bool[ArrayT, "*b ah ad"] | None = None
 
+    # Optional compact future visual latents used by future-latent-conditioned policies.
+    # Shape convention: [*b, cameras, latent_tokens, latent_dim].
+    future_latent_pred: at.Float[ArrayT, "*b c t d"] | None = None
+    future_latent_true: at.Float[ArrayT, "*b c t d"] | None = None
+    future_latent_valid_mask: at.Bool[ArrayT, "*b c"] | None = None
+
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
     # Tokenized prompt mask.
@@ -126,6 +132,9 @@ class Observation(Generic[ArrayT]):
             image_masks=data["image_mask"],
             state=data["state"],
             action_mask=data.get("action_mask"),
+            future_latent_pred=data.get("future_latent_pred"),
+            future_latent_true=data.get("future_latent_true"),
+            future_latent_valid_mask=data.get("future_latent_valid_mask"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -206,6 +215,9 @@ def preprocess_observation(
         image_masks=out_masks,
         state=observation.state,
         action_mask=observation.action_mask,
+        future_latent_pred=observation.future_latent_pred,
+        future_latent_true=observation.future_latent_true,
+        future_latent_valid_mask=observation.future_latent_valid_mask,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

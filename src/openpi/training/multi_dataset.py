@@ -12,6 +12,7 @@ import openpi.models.model as _model
 import openpi.policies.lehome_camera_cv_policy as lehome_camera_cv_policy
 import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
+import openpi.training.future_latent_sidecar as _future_latent_sidecar
 import openpi.transforms as _transforms
 
 
@@ -20,6 +21,7 @@ def _lehome_repack_transform(
     include_images: bool,
     include_wrist_images: bool,
     include_prompt: bool,
+    include_future_latent: bool = False,
 ) -> _transforms.RepackTransform:
     structure = {
         "observation/state": "observation.state",
@@ -34,6 +36,14 @@ def _lehome_repack_transform(
             {
                 "observation/left_rgb": "observation.images.left_rgb",
                 "observation/right_rgb": "observation.images.right_rgb",
+            }
+        )
+    if include_future_latent:
+        structure.update(
+            {
+                "future_latent_pred": "future_latent/pred",
+                "future_latent_true": "future_latent/true",
+                "future_latent_valid_mask": "future_latent/valid_mask",
             }
         )
     return _transforms.RepackTransform(structure)
@@ -166,22 +176,37 @@ def create_multi_dataset(
     for spec in data_config.multi_dataset_specs:
         if not isinstance(spec, _config.LehomeCameraCVDatasetSpec):
             raise TypeError(f"Expected LehomeCameraCVDatasetSpec, got {type(spec)}")
+        if data_config.future_latent_filter_included_datasets and not spec.include_in_future_latent_dataset:
+            continue
 
-        transforms: list[_transforms.DataTransformFn] = [
-            _lehome_repack_transform(
-                include_images=include_images,
-                include_wrist_images=spec.apply_camera_cv_transform,
-                include_prompt=data_config.prompt_from_task,
-            ),
-            _input_transform_for_spec(
-                spec,
-                model_type=model_config.model_type,
-                state_unit=data_config.multi_state_unit,
-                pose_quat_order=data_config.multi_pose_quat_order,
-                action_dim=data_config.multi_action_dim,
-                include_images=include_images,
-            ),
-        ]
+        include_future_latent = data_config.future_latent_sidecar_root is not None
+        transforms: list[_transforms.DataTransformFn] = []
+        if include_future_latent:
+            transforms.append(
+                _future_latent_sidecar.FutureLatentSidecarTransform(
+                    sidecar_root=data_config.future_latent_sidecar_root or "",
+                    source_repo_id=spec.repo_id,
+                    required=data_config.future_latent_sidecar_required,
+                )
+            )
+        transforms.extend(
+            [
+                _lehome_repack_transform(
+                    include_images=include_images,
+                    include_wrist_images=spec.apply_camera_cv_transform,
+                    include_prompt=data_config.prompt_from_task,
+                    include_future_latent=include_future_latent,
+                ),
+                _input_transform_for_spec(
+                    spec,
+                    model_type=model_config.model_type,
+                    state_unit=data_config.multi_state_unit,
+                    pose_quat_order=data_config.multi_pose_quat_order,
+                    action_dim=data_config.multi_action_dim,
+                    include_images=include_images,
+                ),
+            ]
+        )
         if not for_norm_stats:
             transforms.extend(
                 [
@@ -202,5 +227,8 @@ def create_multi_dataset(
                 repo_id=spec.repo_id,
             )
         )
+
+    if not records:
+        raise ValueError("No multi-dataset records remain after filtering.")
 
     return WeightedConcatDataset(records)

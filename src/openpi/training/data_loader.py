@@ -422,6 +422,15 @@ def create_torch_data_loader(
     # For PyTorch DDP, create DistributedSampler and divide batch size by world size
     # For JAX, divide by process count
     sampler = None
+    if data_config.multi_use_sample_weights and hasattr(dataset, "sample_weights"):
+        if framework == "pytorch" and torch.distributed.is_initialized():
+            raise NotImplementedError("Weighted sampling with PyTorch DistributedSampler is not supported.")
+        sample_weights = torch.as_tensor(dataset.sample_weights, dtype=torch.double)
+        sampler = torch.utils.data.WeightedRandomSampler(
+            weights=sample_weights,
+            num_samples=len(sample_weights),
+            replacement=True,
+        )
     if framework == "pytorch":
         if torch.distributed.is_initialized():
             sampler = torch.utils.data.distributed.DistributedSampler(

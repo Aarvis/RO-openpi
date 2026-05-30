@@ -63,6 +63,12 @@ hf upload huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_
   --repo-type model
 
 
+hf upload huggingaccounttest/docker-image-sim-lehome-policy-r55-cotrainbase-polish1-3-5090\
+  "/home/ubuntu/sim-lehome-policy-r55-cotrainbase-polish1-3-5090" \
+  . \
+  --repo-type model
+
+
 hf upload huggingaccounttest/multidata_cotrain_base_human_sim_robot_polish1_3_epoch\
   "/home/ubuntu/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/multicotrain_pretrain_base_real_sim_human_polish_1/4450" \
   . \
@@ -160,7 +166,7 @@ export HF_DATASETS_CACHE=~/LEHOME/.hf_home/datasets
 export TMPDIR=~/LEHOME/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=0,1
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
@@ -188,16 +194,16 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 
-mkdir -p /ephemeral/cache/openpi
-export OPENPI_DATA_HOME=/ephemeral/cache/openpi
-export HF_HOME=/ephemeral/.hf_home
-export HUGGINGFACE_HUB_CACHE=/ephemeral/.hf_home/hub
-export HF_LEROBOT_HOME=/ephemeral/.hf_home/lerobot
+mkdir -p /scratch/cache/openpi
+export OPENPI_DATA_HOME=/scratch/cache/openpi
+export HF_HOME=/scratch/.hf_home
+export HUGGINGFACE_HUB_CACHE=/scratch/.hf_home/hub
+export HF_LEROBOT_HOME=/scratch/.hf_home/lerobot
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
 
-mkdir -p /ephemeral/tmp
-export HF_DATASETS_CACHE=/ephemeral/.hf_home/datasets
-export TMPDIR=/ephemeral/tmp
+mkdir -p /scratch/tmp
+export HF_DATASETS_CACHE=/scratch/.hf_home/datasets
+export TMPDIR=/scratch/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0,1,2,3
@@ -272,16 +278,27 @@ hf download lehome/dataset_challenge_real --repo-type dataset --local-dir "D:\Le
 huggingaccounttest/lehome_train_episodes
 
 
-
-
-
 hf download huggingaccounttest/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch \
   --repo-type model \
-  --local-dir "/home/ubuntu/LEHOME/lehome-openpi/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch"
+  --local-dir "/scratch/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch"
+
+
+hf download huggingaccounttest/multidata_cotrain_base_human_sim_robot_polish1_3_epoch \
+  --repo-type model \
+  --local-dir "/home/ubuntu/LEHOME/multidata_cotrain_base_human_sim_robot_polish1_3_epoch"
 
 hf download huggingaccounttest/pretrain_base_all_garment_4_epoch \
   --repo-type model \
   --local-dir "/home/ubuntu/LEHOME/lehome-openpi/pretrain_base_all_garment_4_epoch"
+
+
+hf download  huggingaccounttest/docker-image-sim-lehome-policy-r55-cotrainbase-polish1-3-5090 \
+  --repo-type model \
+  --local-dir "./"
+
+
+
+ 
 
 
 hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_10_epoch \
@@ -515,3 +532,57 @@ uv run scripts/multi_best_sample_serve_policy.py \
   policy:checkpoint \
   --policy.config pi05_lehome_trained_vla_with_ppo_heads \
   --policy.ppo-device cuda:0
+
+
+
+
+python "future_latent_predictor/Dataset creation/generate_future_latent_dataset.py" \
+--config-name pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+--params-path "/home/ubuntu/LEHOME/lehome-openpi/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch/params" \
+--output-dir "./future_latent_predictor/Dataset creation/output" \
+--future-offset 5 \
+--batch-size 4 \
+--shard-size 512
+
+
+uv run python "future_latent_predictor/Dataset creation/generate_future_latent_dataset.py" \
+  --config-name pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --params-path "/home/ubuntu/LEHOME/lehome-openpi/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch/params" \
+  --output-dir "./future_latent_predictor/Dataset creation/output" \
+  --future-offset 5 \
+  --batch-size 8 \
+  --shard-size 128
+
+
+uv run python "future_latent_predictor/Dataset creation/generate_future_latent_dataset.py" \
+  --config-name pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --params-path "/scratch/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch/params" \
+  --output-dir "/scratch/real_robot_generated_dataset/output" \
+  --future-offset 5 \
+  --batch-size 8 \
+  --shard-size 128
+
+
+uv run torchrun --standalone --nproc_per_node=4 \
+  future_latent_predictor/resampler_autoencoder/train_resampler_autoencoder.py \
+  --config future_latent_predictor/resampler_autoencoder/configs/v100s_4gpu_resampler_autoencoder.json \
+  --data-root /scratch/real_robot_generated_dataset/output \
+  --output-dir /scratch/future_latent_runs/resampler_autoencoder_v1
+
+
+uv run torchrun --standalone --nproc_per_node=4 \
+  future_latent_predictor/future_predictor/train_future_predictor.py \
+  --config future_latent_predictor/future_predictor/configs/v100s_4gpu_future_predictor.json \
+  --data-root /scratch/real_robot_generated_dataset/output \
+  --resampler-checkpoint /scratch/future_latent_runs/resampler_autoencoder_v1/resampler_encoder_latest.pt \
+  --output-dir /scratch/future_latent_runs/future_predictor_v1
+
+
+uv run python "future_latent_predictor/Dataset creation/generate_future_latent_dataset.py" \
+  --config-name pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --params-path "/scratch/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch/params" \
+  --output-dir "/scratch2/sim_robot_generated_dataset/output" \
+  --future-offset 5 \
+  --batch-size 8 \
+  --shard-size 128 \
+  --debug-start-image-count 5

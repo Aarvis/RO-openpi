@@ -95,6 +95,7 @@ def build_dataset_config(config: dict[str, Any], *, split: str) -> GeneratedEmbe
         seed=int(config["training"].get("seed", 42)),
         split=split,
         val_fraction=float(data.get("val_fraction", 0.0)),
+        dataset_weights=dict(data.get("dataset_weights", {})),
     )
 
 

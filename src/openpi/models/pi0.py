@@ -64,10 +64,28 @@ def posemb_sincos(
     return jnp.concatenate([jnp.sin(sinusoid_input), jnp.cos(sinusoid_input)], axis=-1)
 
 
+class FutureLatentPolicyAdapter(nnx.Module):
+    """Projects compact future image latents into the pi0.5 prefix token space."""
+
+    def __init__(self, *, latent_dim: int, hidden_dim: int, output_dim: int, rngs: nnx.Rngs):
+        self.input_proj = nnx.Linear(latent_dim, hidden_dim, rngs=rngs)
+        self.output_proj = nnx.Linear(hidden_dim, output_dim, rngs=rngs)
+
+    def __call__(self, latents: at.Array, valid_mask: at.Array) -> tuple[at.Array, at.Array]:
+        batch_size, num_cameras, latent_tokens, latent_dim = latents.shape
+        tokens = jnp.reshape(latents, (batch_size, num_cameras * latent_tokens, latent_dim))
+        tokens = self.input_proj(tokens)
+        tokens = nnx.swish(tokens)
+        tokens = self.output_proj(tokens)
+        token_mask = einops.repeat(valid_mask, "b c -> b (c t)", t=latent_tokens)
+        return tokens, token_mask
+
+
 class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
+        self.future_latent_config = config.future_latent
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -91,6 +109,13 @@ class Pi0(_model.BaseModel):
         img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
+        if config.future_latent.enabled:
+            self.future_latent_adapter = FutureLatentPolicyAdapter(
+                latent_dim=config.future_latent.latent_dim,
+                hidden_dim=config.future_latent.adapter_hidden_dim,
+                output_dim=paligemma_config.width,
+                rngs=rngs,
+            )
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -103,9 +128,40 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
+    def _select_future_latents(
+        self,
+        obs: _model.Observation,
+        *,
+        rng: at.KeyArrayLike | None,
+        train: bool,
+    ) -> tuple[at.Float[at.Array, "b c t d"], at.Bool[at.Array, "b c"]] | None:
+        if not self.future_latent_config.enabled or obs.future_latent_pred is None:
+            return None
+
+        pred = jnp.asarray(obs.future_latent_pred)
+        true = jnp.asarray(obs.future_latent_true) if obs.future_latent_true is not None else pred
+        valid = (
+            jnp.asarray(obs.future_latent_valid_mask, dtype=jnp.bool_)
+            if obs.future_latent_valid_mask is not None
+            else jnp.ones(pred.shape[:2], dtype=jnp.bool_)
+        )
+        batch_size = pred.shape[0]
+
+        if train and rng is not None:
+            probs = self.future_latent_config
+            choice = jax.random.uniform(rng, (batch_size,))
+            use_pred = choice < probs.predicted_latent_prob
+            use_true = choice < (probs.predicted_latent_prob + probs.true_latent_prob)
+            selected = jnp.where(use_pred[:, None, None, None], pred, true)
+            selected = jnp.where(use_true[:, None, None, None], selected, jnp.zeros_like(selected))
+            selected_valid = jnp.where(use_true[:, None], valid, jnp.zeros_like(valid))
+            return selected, selected_valid
+
+        return pred, valid
+
     @at.typecheck
     def embed_prefix(
-        self, obs: _model.Observation
+        self, obs: _model.Observation, *, rng: at.KeyArrayLike | None = None, train: bool = False
     ) -> tuple[at.Float[at.Array, "b s emb"], at.Bool[at.Array, "b s"], at.Bool[at.Array, " s"]]:
         input_mask = []
         ar_mask = []
@@ -124,6 +180,16 @@ class Pi0(_model.BaseModel):
             )
             # image tokens attend to each other
             ar_mask += [False] * image_tokens.shape[1]
+
+        future_latents = self._select_future_latents(obs, rng=rng, train=train)
+        if future_latents is not None:
+            future_values, future_valid = future_latents
+            future_tokens, future_mask = self.future_latent_adapter(future_values, future_valid)
+            if tokens:
+                future_tokens = future_tokens.astype(tokens[0].dtype)
+            tokens.append(future_tokens)
+            input_mask.append(future_mask)
+            ar_mask += [False] * future_tokens.shape[1]
 
         # add language (aka tokenized inputs)
         if obs.tokenized_prompt is not None:
@@ -190,7 +256,7 @@ class Pi0(_model.BaseModel):
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
-        preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
+        preprocess_rng, future_rng, noise_rng, time_rng = jax.random.split(rng, 4)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
         batch_shape = actions.shape[:-2]
@@ -201,7 +267,7 @@ class Pi0(_model.BaseModel):
         u_t = noise - actions
 
         # one big forward pass of prefix + suffix at once
-        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
+        prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation, rng=future_rng, train=train)
         suffix_tokens, suffix_mask, suffix_ar_mask, adarms_cond = self.embed_suffix(observation, x_t, time)
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)

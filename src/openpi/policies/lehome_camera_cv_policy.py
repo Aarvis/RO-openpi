@@ -327,6 +327,10 @@ class LehomeCameraCVInputs(transforms.DataTransformFn):
                 data["prompt"] = data["prompt"].decode("utf-8")
             inputs["prompt"] = data["prompt"]
 
+        for key in ("future_latent_pred", "future_latent_true", "future_latent_valid_mask"):
+            if key in data:
+                inputs[key] = data[key]
+
         return inputs
 
 
@@ -551,5 +555,9 @@ class LehomePrecomputed16DInputs(transforms.DataTransformFn):
             if isinstance(data["prompt"], bytes):
                 data["prompt"] = data["prompt"].decode("utf-8")
             inputs["prompt"] = data["prompt"]
+
+        for key in ("future_latent_pred", "future_latent_true", "future_latent_valid_mask"):
+            if key in data:
+                inputs[key] = data[key]
 
         return inputs

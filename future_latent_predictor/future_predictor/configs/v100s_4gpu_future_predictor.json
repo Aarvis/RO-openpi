@@ -5,6 +5,11 @@
     "cameras": ["top", "right_wrist", "left_wrist"],
     "embedding_shape": [256, 2048],
     "val_fraction": 0.02,
+    "dataset_weights": {
+      "local__lehome_pretrain_all_garment_round2_data": 0.5,
+      "local__lehome_robot_sim_all_garment_round2_data": 2.0,
+      "local__lehome_robot_real_all_garment_round2_data": 8.0
+    },
     "shuffle_files": true,
     "shuffle_rows": true
   },
