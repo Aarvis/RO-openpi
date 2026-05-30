@@ -159,7 +159,7 @@ def safe_dataset_name(repo_id: str) -> str:
 
 def enabled_specs(config_name: str) -> list[_config.LehomeCameraCVDatasetSpec]:
     train_config = _config.get_config(config_name)
-    data_config = train_config.data.create(config_assets_dirs=train_config.assets_dirs, model_config=train_config.model)
+    data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
     specs = []
     for spec in data_config.multi_dataset_specs:
         if not isinstance(spec, _config.LehomeCameraCVDatasetSpec):
