@@ -488,6 +488,16 @@ def row_batches_from_file(path: Path, *, batch_size: int, cameras: tuple[str, ..
     return [rows[index : index + batch_size] for index in range(0, len(rows), batch_size)]
 
 
+def parquet_row_count(path: Path) -> int:
+    return int(pl.scan_parquet(path).select(pl.len()).collect().item())
+
+
+def progress_total_for_files(files: list[Path], *, max_rows: int | None, num_workers: int) -> int:
+    if max_rows is not None:
+        return max(0, (max_rows + num_workers - 1) // num_workers)
+    return sum(parquet_row_count(path) for path in files)
+
+
 def process_dataset(
     *,
     dataset_input: DatasetInput,
@@ -525,15 +535,23 @@ def process_dataset(
     rows_skipped = 0
     shard_rows: list[dict[str, Any]] = []
     shard_index = 0
-    progress_total = None
-    if max_rows is not None:
-        progress_total = max(0, (max_rows + num_workers - 1) // num_workers)
+    progress_total = progress_total_for_files(files, max_rows=max_rows, num_workers=num_workers)
     progress = tqdm(
         total=progress_total,
         desc=f"Sidecar {dataset_input.safe_name} worker {worker_index}/{num_workers}",
         unit="row",
+        dynamic_ncols=True,
         position=worker_index,
         leave=True,
+    )
+    progress.set_postfix(
+        {
+            "written": rows_written,
+            "skipped": rows_skipped,
+            "shard": shard_index,
+            "files": len(files),
+        },
+        refresh=False,
     )
 
     try:
@@ -548,6 +566,15 @@ def process_dataset(
                     if not batch["valid"].any():
                         rows_skipped += len(rows)
                         progress.update(len(rows))
+                        progress.set_postfix(
+                            {
+                                "written": rows_written,
+                                "skipped": rows_skipped,
+                                "shard": shard_index,
+                                "file": path.name,
+                            },
+                            refresh=False,
+                        )
                         continue
                     current = batch["current"].to(device, non_blocking=True)
                     future = batch["future"].to(device, non_blocking=True)
@@ -569,6 +596,15 @@ def process_dataset(
                     shard_rows.extend(new_rows)
                     rows_written += len(new_rows)
                     progress.update(len(rows))
+                    progress.set_postfix(
+                        {
+                            "written": rows_written,
+                            "skipped": rows_skipped,
+                            "shard": shard_index,
+                            "file": path.name,
+                        },
+                        refresh=False,
+                    )
                     if len(shard_rows) >= shard_size:
                         write_shard(
                             shard_rows,
@@ -582,6 +618,15 @@ def process_dataset(
                         )
                         shard_rows = []
                         shard_index += 1
+                        progress.set_postfix(
+                            {
+                                "written": rows_written,
+                                "skipped": rows_skipped,
+                                "shard": shard_index,
+                                "file": path.name,
+                            },
+                            refresh=False,
+                        )
                 if max_rows is not None and rows_written + rows_skipped >= max_rows:
                     break
         if shard_rows:
