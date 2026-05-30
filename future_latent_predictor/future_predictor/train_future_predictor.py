@@ -402,7 +402,11 @@ def validate(
     model.train()
     if completed_batches == 0:
         return {f"val_{key}": float("nan") for key in total_stats}
-    return {f"val_{key}": value / completed_batches for key, value in total_stats.items()}
+    averaged = {f"val_{key}": value / completed_batches for key, value in total_stats.items()}
+    averaged["val_mse_improvement"] = 1.0 - (
+        averaged["val_mse"] / max(averaged["val_copy_mse"], 1e-8)
+    )
+    return averaged
 
 
 def main() -> None:
