@@ -339,6 +339,8 @@ def validate(
     mse_weight: float,
     cosine_weight: float,
     delta_weight: float,
+    show_progress: bool = False,
+    desc: str = "validation",
 ) -> dict[str, float]:
     model.eval()
     resampler.eval()
@@ -354,7 +356,16 @@ def validate(
     }
     completed_batches = 0
 
-    for _ in range(val_batches):
+    progress = tqdm(
+        range(val_batches),
+        desc=desc,
+        disable=not show_progress,
+        dynamic_ncols=True,
+        leave=False,
+        position=1,
+        unit="batch",
+    )
+    for _ in progress:
         try:
             batch = next(iterator)
         except StopIteration:
@@ -380,6 +391,13 @@ def validate(
         for key in total_stats:
             total_stats[key] += stats[key]
         completed_batches += 1
+        if show_progress:
+            progress.set_postfix(
+                loss=total_stats["loss"] / completed_batches,
+                mse=total_stats["mse"] / completed_batches,
+                copy=total_stats["copy_mse"] / completed_batches,
+                imp=total_stats["mse_improvement"] / completed_batches,
+            )
 
     model.train()
     if completed_batches == 0:
@@ -613,6 +631,8 @@ def main() -> None:
                     mse_weight=mse_weight,
                     cosine_weight=cosine_weight,
                     delta_weight=delta_weight,
+                    show_progress=True,
+                    desc=f"val epoch {epoch + 1} step {global_step}",
                 )
                 val_payload = {
                     "split": "val",
