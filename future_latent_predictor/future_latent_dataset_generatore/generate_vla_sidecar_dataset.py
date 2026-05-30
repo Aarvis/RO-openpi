@@ -617,7 +617,14 @@ def validate_config(config: dict[str, Any]) -> None:
         "future_predictor_checkpoint",
         "future_offset",
     ]
-    missing = [key for key in required if key not in config or config[key] in {None, ""}]
+    missing = [
+        key
+        for key in required
+        if key not in config
+        or config[key] is None
+        or (isinstance(config[key], str) and config[key] == "")
+        or (isinstance(config[key], list) and not config[key])
+    ]
     if missing:
         raise ValueError(f"Generator config is missing required keys: {missing}")
     if int(config.get("future_offset", 0)) <= 0:
@@ -663,4 +670,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
