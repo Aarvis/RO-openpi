@@ -1,0 +1,48 @@
+{
+  "data": {
+    "data_root": "/scratch/real_robot_generated_dataset/output",
+    "include_datasets": [],
+    "cameras": ["top", "right_wrist", "left_wrist"],
+    "embedding_shape": [256, 2048],
+    "use_t": true,
+    "use_t_5": true,
+    "shuffle_files": true,
+    "shuffle_rows": true
+  },
+  "model": {
+    "cameras": ["top", "right_wrist", "left_wrist"],
+    "input_tokens": 256,
+    "input_dim": 2048,
+    "latent_tokens": 24,
+    "latent_dim": 512,
+    "encoder_layers": 2,
+    "decoder_layers": 2,
+    "num_heads": 16,
+    "mlp_ratio": 4.0,
+    "dropout": 0.0
+  },
+  "loss": {
+    "mse_weight": 1.0,
+    "cosine_weight": 0.2
+  },
+  "training": {
+    "output_dir": "/scratch/future_latent_runs/resampler_autoencoder_v1",
+    "epochs": 20,
+    "steps_per_epoch": 4000,
+    "batch_size_per_gpu": 2,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 0.0001,
+    "weight_decay": 0.01,
+    "adam_betas": [0.9, 0.95],
+    "warmup_steps": 500,
+    "min_lr_ratio": 0.05,
+    "clip_grad_norm": 1.0,
+    "precision": "fp16",
+    "num_workers": 2,
+    "pin_memory": true,
+    "save_every_epochs": 1,
+    "log_every_steps": 20,
+    "seed": 42
+  }
+}
+
