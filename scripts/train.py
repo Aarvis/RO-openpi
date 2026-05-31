@@ -171,10 +171,16 @@ def train_step(
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
     if config.non_adapter_lr_multiplier is not None:
         adapter_filter = nnx_utils.PathRegex(config.adapter_param_regex)
+
+        def scale_update(update):
+            if hasattr(update, "value"):
+                return update.replace(update.value * config.non_adapter_lr_multiplier)
+            return update * config.non_adapter_lr_multiplier
+
         updates = nnx_utils.state_map(
             updates,
             nnx.Not(adapter_filter),
-            lambda update: update * config.non_adapter_lr_multiplier,
+            scale_update,
         )
     new_params = optax.apply_updates(params, updates)
 
