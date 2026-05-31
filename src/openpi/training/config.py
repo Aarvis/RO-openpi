@@ -1024,6 +1024,9 @@ class TrainConfig:
 
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
+    # If true, logs first-batch camera views to wandb. Disabled by default because this copies sharded JAX image
+    # batches back to host at startup and can stress unstable CUDA driver states.
+    log_first_batch_images: bool = False
 
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
@@ -1459,7 +1462,7 @@ _CONFIGS = [
                 predicted_latent_prob=0.50,
                 true_latent_prob=0.30,
                 dropped_latent_prob=0.20,
-                sidecar_root="/scratch/vla_future_latent_sidecar/output",
+                sidecar_root="/ephemeral2/robot_future_latents_dependency_multi_cotrain_base3/vla_future_latent_sidecar",
                 resampler_checkpoint_path="/scratch/future_latent_runs/resampler_autoencoder_v1/resampler_encoder_latest.pt",
                 future_predictor_checkpoint_path="/scratch/future_latent_runs/future_predictor_v1/future_predictor_latest.pt",
                 freeze_image_encoder=True,
@@ -1477,7 +1480,7 @@ _CONFIGS = [
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_pretrain_all_garment_round2_data", #human_pretrain
                     sample_weight=1.6,
-                    include_in_future_latent_dataset=True,
+                    include_in_future_latent_dataset=False,
                     apply_camera_cv_transform=False,
                     fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
                     camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
@@ -1490,7 +1493,7 @@ _CONFIGS = [
                 ),
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_robot_sim_all_garment_round2_data", #robot_sim_dataset
-                    sample_weight=4.0,
+                    sample_weight=0.15,
                     include_in_future_latent_dataset=True,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common.json"),
@@ -1504,7 +1507,7 @@ _CONFIGS = [
                 ),
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_robot_real_all_garment_round2_data", #robot_real_dataset
-                    sample_weight=8.0,
+                    sample_weight=1.0,
                     include_in_future_latent_dataset=True,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
@@ -1538,9 +1541,9 @@ _CONFIGS = [
             output_action_dim=12,
             state_unit="rad",
             pose_quat_order="wxyz",
-            future_latent_sidecar_root="/scratch/vla_future_latent_sidecar/output",
+            future_latent_sidecar_root="/ephemeral2/robot_future_latents_dependency_multi_cotrain_base3/vla_future_latent_sidecar",
             future_latent_filter_included_datasets=True,
-            future_latent_sidecar_required=True,
+            future_latent_sidecar_required=False,
             use_sample_weights=True,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
@@ -1557,7 +1560,7 @@ _CONFIGS = [
         non_adapter_lr_multiplier=0.1,
         adapter_param_regex=".*future_latent_adapter.*",
         num_train_steps=1800,
-        batch_size=400,
+        batch_size=64,
         log_interval=50,
         save_steps=(900,),
         keep_period=None,

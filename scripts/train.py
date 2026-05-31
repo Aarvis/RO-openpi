@@ -169,6 +169,13 @@ def train_step(
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
+    if config.non_adapter_lr_multiplier is not None:
+        adapter_filter = nnx_utils.PathRegex(config.adapter_param_regex)
+        updates = nnx_utils.state_map(
+            updates,
+            nnx.Not(adapter_filter),
+            lambda update: update * config.non_adapter_lr_multiplier,
+        )
     new_params = optax.apply_updates(params, updates)
 
     # Update the model in place and return the new full state.
@@ -279,12 +286,14 @@ def main(config: _config.TrainConfig):
             config.resolved_val_batch_size,
         )
 
-    # Log images from first batch to sanity check.
-    images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)
+    # Optional sanity-check image logging. This copies sharded JAX arrays back to host, so keep it disabled for
+    # large/future-latent runs unless explicitly needed.
+    if config.wandb_enabled and config.log_first_batch_images:
+        images_to_log = [
+            wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+            for i in range(min(5, len(next(iter(batch[0].images.values())))))
+        ]
+        wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
