@@ -183,6 +183,18 @@ def compact_prediction_loss(
     target_delta = target_float - current_float
     predicted_delta = prediction_float - current_float
     delta_mse = ((predicted_delta - target_delta).square() * valid_camera_mask).sum() / mse_denominator
+    delta_cosine = F.cosine_similarity(predicted_delta, target_delta, dim=-1)
+    delta_cosine_score = (delta_cosine * valid_token_mask).sum() / cosine_denominator
+
+    predicted_delta_norm = predicted_delta.norm(dim=-1)
+    target_delta_norm = target_delta.norm(dim=-1)
+    delta_norm_ratio = (predicted_delta_norm / target_delta_norm.clamp_min(1e-8) * valid_token_mask).sum() / cosine_denominator
+
+    delta_dot = (predicted_delta * target_delta).sum(dim=-1)
+    target_delta_norm_sq = target_delta.square().sum(dim=-1)
+    delta_projection_ratio = (
+        delta_dot / target_delta_norm_sq.clamp_min(1e-8) * valid_token_mask
+    ).sum() / cosine_denominator
 
     copy_mse = ((current_float - target_float).square() * valid_camera_mask).sum() / mse_denominator
     copy_cosine = F.cosine_similarity(current_float, target_float, dim=-1)
@@ -195,6 +207,9 @@ def compact_prediction_loss(
         "mse": float(mse.detach().cpu()),
         "cosine": float(cosine_loss.detach().cpu()),
         "delta_mse": float(delta_mse.detach().cpu()),
+        "delta_cosine": float(delta_cosine_score.detach().cpu()),
+        "delta_norm_ratio": float(delta_norm_ratio.detach().cpu()),
+        "delta_projection_ratio": float(delta_projection_ratio.detach().cpu()),
         "copy_mse": float(copy_mse.detach().cpu()),
         "copy_cosine": float(copy_cosine_loss.detach().cpu()),
         "mse_improvement": float(improvement.detach().cpu()),
@@ -315,14 +330,19 @@ def print_metric_line(payload: dict[str, Any]) -> None:
             f"val step={payload['global_step']} epoch={payload['epoch'] + 1} "
             f"loss={payload['val_loss']:.5f} mse={payload['val_mse']:.5f} "
             f"copy={payload['val_copy_mse']:.5f} imp={payload['val_mse_improvement']:.3f} "
-            f"cos={payload['val_cosine']:.5f} copy_cos={payload['val_copy_cosine']:.5f}"
+            f"cos={payload['val_cosine']:.5f} copy_cos={payload['val_copy_cosine']:.5f} "
+            f"dcos={payload['val_delta_cosine']:.3f} "
+            f"dnorm={payload['val_delta_norm_ratio']:.3f} "
+            f"dproj={payload['val_delta_projection_ratio']:.3f}"
         )
     else:
         message = (
             f"train step={payload['global_step']} epoch={payload['epoch'] + 1} "
             f"loss={payload['loss']:.5f} mse={payload['mse']:.5f} "
             f"copy={payload['copy_mse']:.5f} imp={payload['mse_improvement']:.3f} "
-            f"cos={payload['cosine']:.5f} lr={payload['lr']:.2e}"
+            f"cos={payload['cosine']:.5f} dcos={payload['delta_cosine']:.3f} "
+            f"dnorm={payload['delta_norm_ratio']:.3f} "
+            f"dproj={payload['delta_projection_ratio']:.3f} lr={payload['lr']:.2e}"
         )
     tqdm.write(message)
 
@@ -350,6 +370,9 @@ def validate(
         "mse": 0.0,
         "cosine": 0.0,
         "delta_mse": 0.0,
+        "delta_cosine": 0.0,
+        "delta_norm_ratio": 0.0,
+        "delta_projection_ratio": 0.0,
         "copy_mse": 0.0,
         "copy_cosine": 0.0,
         "mse_improvement": 0.0,
@@ -397,6 +420,9 @@ def validate(
                 mse=total_stats["mse"] / completed_batches,
                 copy=total_stats["copy_mse"] / completed_batches,
                 imp=total_stats["mse_improvement"] / completed_batches,
+                dcos=total_stats["delta_cosine"] / completed_batches,
+                dnorm=total_stats["delta_norm_ratio"] / completed_batches,
+                dproj=total_stats["delta_projection_ratio"] / completed_batches,
             )
 
     model.train()
@@ -556,6 +582,9 @@ def main() -> None:
                 "mse": 0.0,
                 "cosine": 0.0,
                 "delta_mse": 0.0,
+                "delta_cosine": 0.0,
+                "delta_norm_ratio": 0.0,
+                "delta_projection_ratio": 0.0,
                 "copy_mse": 0.0,
                 "copy_cosine": 0.0,
                 "mse_improvement": 0.0,

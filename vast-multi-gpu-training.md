@@ -75,6 +75,12 @@ hf upload huggingaccounttest/multidata_cotrain_base_human_sim_robot_polish1_3_ep
   --repo-type model
 
 
+hf upload huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3\
+  "/scratch2/future_latent_dependency_weights_data" \
+  . \
+  --repo-type model
+
+
 
 
 hf upload huggingaccounttest/robot_ft_only_with_state_all_garment_2_epoch \
