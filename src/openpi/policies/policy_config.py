@@ -7,6 +7,8 @@ from typing import Any
 import jax.numpy as jnp
 
 import openpi.models.model as _model
+import openpi.models.pi0_config as pi0_config
+from openpi.policies import future_latent_runtime as _future_latent_runtime
 import openpi.policies.policy as _policy
 import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
@@ -123,6 +125,19 @@ def create_trained_policy(
         except ImportError:
             pytorch_device = "cpu"
 
+    future_runtime = None
+    if (
+        not is_pytorch
+        and isinstance(train_config.model, pi0_config.Pi0Config)
+        and train_config.model.future_latent.enabled
+        and train_config.model.future_latent.resampler_checkpoint_path
+        and train_config.model.future_latent.future_predictor_checkpoint_path
+    ):
+        future_runtime = _future_latent_runtime.FutureLatentRuntime(
+            config=train_config.model.future_latent,
+            device=pytorch_device,
+        )
+
     return _policy.Policy(
         model,
         transforms=[
@@ -142,4 +157,5 @@ def create_trained_policy(
         metadata=train_config.policy_metadata,
         is_pytorch=is_pytorch,
         pytorch_device=pytorch_device if is_pytorch else None,
+        future_latent_runtime=future_runtime,
     )

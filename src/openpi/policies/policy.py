@@ -15,6 +15,7 @@ from typing_extensions import override
 
 from openpi import transforms as _transforms
 from openpi.models import model as _model
+from openpi.policies import future_latent_runtime as _future_latent_runtime
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 
@@ -46,6 +47,7 @@ class Policy(BasePolicy):
         metadata: dict[str, Any] | None = None,
         pytorch_device: str = "cpu",
         is_pytorch: bool = False,
+        future_latent_runtime: _future_latent_runtime.FutureLatentRuntime | None = None,
     ):
         """Initialize the Policy.
 
@@ -67,12 +69,14 @@ class Policy(BasePolicy):
         self._metadata = metadata or {}
         self._is_pytorch_model = is_pytorch
         self._pytorch_device = pytorch_device
+        self._future_latent_runtime = future_latent_runtime
 
         if self._is_pytorch_model:
             self._model = self._model.to(pytorch_device)
             self._model.eval()
             self._sample_actions = model.sample_actions
             self._sample_actions_with_policy_latent = getattr(model, "sample_actions_with_policy_latent", None)
+            self._encode_future_latent_image_embeddings = None
         else:
             # JAX model setup
             self._sample_actions = nnx_utils.module_jit(model.sample_actions)
@@ -80,6 +84,12 @@ class Policy(BasePolicy):
             self._sample_actions_with_policy_latent = (
                 nnx_utils.module_jit(sample_actions_with_policy_latent)
                 if sample_actions_with_policy_latent is not None
+                else None
+            )
+            encode_future_latent_image_embeddings = getattr(model, "encode_future_latent_image_embeddings", None)
+            self._encode_future_latent_image_embeddings = (
+                nnx_utils.module_jit(encode_future_latent_image_embeddings)
+                if future_latent_runtime is not None and encode_future_latent_image_embeddings is not None
                 else None
             )
             self._rng = rng or jax.random.key(0)
@@ -93,6 +103,12 @@ class Policy(BasePolicy):
             # Make a batch and convert to jax.Array.
             inputs = jax.tree.map(lambda x: jnp.asarray(x)[np.newaxis, ...], inputs)
             self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
+            if self._future_latent_runtime is not None:
+                if self._encode_future_latent_image_embeddings is None:
+                    raise ValueError("This policy/model does not support future latent image embedding extraction.")
+                future_observation = _model.Observation.from_dict(inputs)
+                image_embeddings = self._encode_future_latent_image_embeddings(future_observation)
+                inputs = self._future_latent_runtime.add_future_latents(inputs, image_embeddings)
         else:
             # Convert inputs to PyTorch tensors and move to correct device
             inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)

@@ -159,6 +159,15 @@ class Pi0(_model.BaseModel):
 
         return pred, valid
 
+    def encode_future_latent_image_embeddings(self, obs: _model.Observation) -> dict[str, at.Array]:
+        """Return current image encoder tokens used by the PyTorch future-latent stack at inference."""
+        obs = _model.preprocess_observation(None, obs, train=False)
+        embeddings = {}
+        for name in obs.images:
+            image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
+            embeddings[name] = image_tokens
+        return embeddings
+
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation, *, rng: at.KeyArrayLike | None = None, train: bool = False
