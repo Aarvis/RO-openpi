@@ -52,6 +52,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-gpu-workers", default=None)
     parser.add_argument("--max-rows-per-dataset", type=int, default=None)
     parser.add_argument("--skip-existing", action="store_true", default=None)
+    parser.add_argument(
+        "--check-inputs-only",
+        action="store_true",
+        help="Print and save the embedding-root dataset summary, then exit before loading models.",
+    )
     parser.add_argument("--worker-index", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--num-workers", type=int, default=1, help=argparse.SUPPRESS)
     return parser.parse_args()
@@ -177,6 +182,79 @@ class DatasetInput:
     safe_name: str
     root: Path
     files: tuple[Path, ...]
+
+
+def embedding_input_summary(config: dict[str, Any]) -> dict[str, Any]:
+    roots = [Path(path) for path in config.get("embedding_dataset_roots", [])]
+    specs = enabled_specs(str(config["config_name"]))
+    datasets = []
+    for spec in specs:
+        source = spec.repo_id
+        safe_name = safe_dataset_name(source)
+        root_summaries = []
+        total_files = 0
+        for embedding_root in roots:
+            dataset_root = embedding_root / safe_name
+            files = tuple(sorted(dataset_root.glob("*.parquet")))
+            total_files += len(files)
+            root_summaries.append(
+                {
+                    "embedding_root": str(embedding_root),
+                    "dataset_root": str(dataset_root),
+                    "exists": dataset_root.exists(),
+                    "is_symlink": dataset_root.is_symlink(),
+                    "resolved_path": str(dataset_root.resolve())
+                    if dataset_root.exists() or dataset_root.is_symlink()
+                    else None,
+                    "parquet_files": len(files),
+                }
+            )
+        datasets.append(
+            {
+                "source_repo_id": source,
+                "safe_dataset_name": safe_name,
+                "total_parquet_files": total_files,
+                "roots": root_summaries,
+            }
+        )
+
+    return {
+        "config_name": str(config["config_name"]),
+        "embedding_dataset_roots": [str(root) for root in roots],
+        "output_dir": str(config["output_dir"]),
+        "enabled_future_latent_datasets": len(datasets),
+        "total_parquet_files": sum(int(dataset["total_parquet_files"]) for dataset in datasets),
+        "missing_or_empty_datasets": [
+            dataset["source_repo_id"] for dataset in datasets if int(dataset["total_parquet_files"]) == 0
+        ],
+        "datasets": datasets,
+    }
+
+
+def print_embedding_input_summary(summary: dict[str, Any]) -> None:
+    print("VLA sidecar embedding input summary:")
+    print(f"  config_name: {summary['config_name']}")
+    print(f"  output_dir: {summary['output_dir']}")
+    print(f"  embedding_dataset_roots: {summary['embedding_dataset_roots']}")
+    print(f"  enabled future-latent datasets: {summary['enabled_future_latent_datasets']}")
+    print(f"  total parquet files found: {summary['total_parquet_files']}")
+    for dataset in summary["datasets"]:
+        status = "found" if dataset["total_parquet_files"] else "missing/empty"
+        print(
+            f"  - {dataset['source_repo_id']} ({dataset['safe_dataset_name']}): "
+            f"{status}, files={dataset['total_parquet_files']}"
+        )
+        for root_summary in dataset["roots"]:
+            symlink = " symlink" if root_summary["is_symlink"] else ""
+            print(
+                f"    root={root_summary['embedding_root']} "
+                f"files={root_summary['parquet_files']} exists={root_summary['exists']}{symlink}"
+            )
+            print(f"    dataset_path={root_summary['dataset_root']}")
+            if root_summary["resolved_path"] and root_summary["resolved_path"] != root_summary["dataset_root"]:
+                print(f"    resolves_to={root_summary['resolved_path']}")
+    if summary["missing_or_empty_datasets"]:
+        print(f"  WARNING missing/empty datasets: {summary['missing_or_empty_datasets']}")
 
 
 def discover_inputs(config: dict[str, Any]) -> list[DatasetInput]:
@@ -687,6 +765,19 @@ def main() -> None:
     args = parse_args()
     config = resolve_config(args)
     validate_config(config)
+
+    if args.num_workers == 1 and args.worker_index == 0:
+        output_dir = Path(config["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        input_summary = embedding_input_summary(config)
+        print_embedding_input_summary(input_summary)
+        save_json(output_dir / "vla_sidecar_embedding_input_summary.json", input_summary)
+        if args.check_inputs_only:
+            if input_summary["missing_or_empty_datasets"]:
+                raise FileNotFoundError(
+                    f"Missing/empty embedding datasets: {input_summary['missing_or_empty_datasets']}"
+                )
+            return
 
     if maybe_launch_gpu_workers(args, config):
         return

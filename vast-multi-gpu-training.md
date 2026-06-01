@@ -76,10 +76,12 @@ hf upload huggingaccounttest/multidata_cotrain_base_human_sim_robot_polish1_3_ep
 
 
 hf upload huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3\
-  "/scratch2/future_latent_dependency_weights_data" \
+  "/scratch2/sim_future_latent_dependency_weights_data" \
   . \
   --repo-type model
 
+
+robot_future_latents_dependency_multi_cotrain_base3
 
 
 
@@ -90,8 +92,8 @@ hf upload huggingaccounttest/robot_ft_only_with_state_all_garment_2_epoch \
 
 
 
-  hf upload huggingaccounttest/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_2_epoch\
-  "/home/ubuntu/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/lehome_multi_cotrain_weighted_4epochs/7500" \
+  hf upload huggingaccounttest/cotrain_base_future_latent_sim_only_trial_1500\
+  "/ephemeral2/cotrain_base_future_latent_sim_only_trial_1500" \
   . \
   --repo-type model
 
@@ -180,24 +182,57 @@ export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
 
-mkdir -p /dev/shm/cache/openpi
-export OPENPI_DATA_HOME=/dev/shm/cache/openpi
-export HF_HOME=/dev/shm/.hf_home
-export HUGGINGFACE_HUB_CACHE=/dev/shm/.hf_home/hub
-export HF_LEROBOT_HOME=/dev/shm/.hf_home/lerobot
+mkdir -p /ephemeral2/cache/openpi
+export OPENPI_DATA_HOME=/ephemeral2/cache/openpi
+export HF_HOME=/ephemeral2/.hf_home
+export HUGGINGFACE_HUB_CACHE=/ephemeral2/.hf_home/hub
+export HF_LEROBOT_HOME=/ephemeral2/.hf_home/lerobot
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
 
-mkdir -p /dev/shm/tmp
-export HF_DATASETS_CACHE=/dev/shm/.hf_home/datasets
-export TMPDIR=/dev/shm/tmp
+mkdir -p /ephemeral2/tmp
+export HF_DATASETS_CACHE=/ephemeral2/.hf_home/datasets
+export TMPDIR=/ephemeral2/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
+
+mkdir -p /ephemeral2/cache/openpi
+export OPENPI_DATA_HOME=/ephemeral2/cache/openpi
+export HF_HOME=/ephemeral2/.hf_home
+export HUGGINGFACE_HUB_CACHE=/ephemeral2/.hf_home/hub
+export HF_LEROBOT_HOME=/ephemeral2/.hf_home/lerobot
+unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p /ephemeral2/tmp
+export HF_DATASETS_CACHE=/ephemeral2/.hf_home/datasets
+export TMPDIR=/ephemeral2/tmp
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+
+
+
+uv run scripts/multi_serve_policy.py \
+  --num-servers 1 \
+  --start-port 8000 \
+  --gpu-id 0 \
+  --total-gpu-fraction 0.80 \
+  --xla-preallocate \
+  --log-dir logs/multi_serve_policy_future_latent \
+  -- \
+  policy:checkpoint \
+  --policy.config pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --policy.dir /ephemeral2/cotrain_base_future_latent_sim_only_trial_200
 
 
 mkdir -p /scratch/cache/openpi
@@ -286,7 +321,26 @@ huggingaccounttest/lehome_train_episodes
 
 hf download huggingaccounttest/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch \
   --repo-type model \
-  --local-dir "/scratch/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch"
+  --local-dir "/ephemeral2/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch"
+
+
+hf download huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3 \
+  --repo-type model \
+  --local-dir "/ephemeral2/robot_future_latents_dependency_multi_cotrain_base3"
+
+hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
+  --repo-type model \
+  --local-dir "/ephemeral2/sim_future_latents_dependency_multi_cotrain_base3"
+
+
+hf download huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3 \
+  --repo-type model \
+  --local-dir "/scratch2/sim_future_latent_dependency_weights_data"
+
+
+  
+
+
 
 
 hf download huggingaccounttest/multidata_cotrain_base_human_sim_robot_polish1_3_epoch \
@@ -298,9 +352,11 @@ hf download huggingaccounttest/pretrain_base_all_garment_4_epoch \
   --local-dir "/home/ubuntu/LEHOME/lehome-openpi/pretrain_base_all_garment_4_epoch"
 
 
-hf download  huggingaccounttest/docker-image-sim-lehome-policy-r55-cotrainbase-polish1-3-5090 \
-  --repo-type model \
-  --local-dir "./"
+uv run scripts/train.py \
+  pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --exp-name cotrain_base_future_latent_robot_only_polish8 \
+  --fsdp-devices 1 \
+  --overwrite
 
 
 
@@ -592,3 +648,5 @@ uv run python "future_latent_predictor/Dataset creation/generate_future_latent_d
   --batch-size 8 \
   --shard-size 128 \
   --debug-start-image-count 5
+
+uv run torchrun --standalone --nproc_per_node=4   future_latent_predictor/future_predictor/train_future_predictor.py   --config future_latent_predictor/future_predictor/configs/v100s_4gpu_future_predictor.json   --data-root /scratch/future_latent_embedding_roots   --resampler-checkpoint /scratch2/future_latent_dependency_weights_data/resampler_autoencoder_sim_real_run_v1/resampler_encoder_latest.pt   --output-dir /scratch/sim_future_latent__run/future_predictor_v1
