@@ -441,7 +441,9 @@ def _write_shard(rows: list[dict[str, Any]], output_path: Path) -> None:
     import polars as pl
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(rows).write_parquet(output_path)
+    # Embeddings are MiB-scale binary blobs. Parquet statistics can duplicate
+    # large binary page values, roughly doubling shard size.
+    pl.DataFrame(rows).write_parquet(output_path, statistics=False)
 
 
 def _safe_dataset_name(repo_id: str) -> str:
