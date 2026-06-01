@@ -29,6 +29,7 @@ from future_latent_predictor.future_predictor.dataset import FuturePredictionDat
 from future_latent_predictor.future_predictor.dataset import FuturePredictionDataset
 from future_latent_predictor.future_predictor.dataset import estimate_num_prediction_samples
 from future_latent_predictor.future_predictor.dataset import infer_state_dim
+from future_latent_predictor.future_predictor.dataset import parquet_file_summary
 from future_latent_predictor.future_predictor.model import FutureLatentPredictor
 from future_latent_predictor.future_predictor.model import count_parameters
 from future_latent_predictor.resampler_autoencoder.model import CAMERAS
@@ -99,6 +100,31 @@ def build_dataset_config(config: dict[str, Any], *, split: str) -> FuturePredict
         val_fraction=float(data.get("val_fraction", 0.0)),
         dataset_weights=dict(data.get("dataset_weights", {})),
     )
+
+
+def print_dataset_file_summary(summary: dict[str, Any]) -> None:
+    print("Future predictor dataset file summary:")
+    print(f"  data_root: {summary['data_root']}")
+    include_datasets = summary.get("include_datasets") or ["<all datasets under data_root>"]
+    print(f"  include_datasets: {include_datasets}")
+    print(f"  total parquet files found: {summary['total_parquet_files']}")
+    for root_summary in summary["configured_roots"]:
+        status = "found" if root_summary["parquet_files"] else "missing/empty"
+        symlink = " symlink" if root_summary["is_symlink"] else ""
+        print(
+            f"  - {root_summary['dataset']}: {status}, "
+            f"files={root_summary['parquet_files']}, exists={root_summary['exists']}{symlink}"
+        )
+        print(f"    path: {root_summary['path']}")
+        if root_summary["resolved_path"] and root_summary["resolved_path"] != root_summary["path"]:
+            print(f"    resolves_to: {root_summary['resolved_path']}")
+    for split_name in ("train", "val"):
+        split_summary = summary[split_name]
+        print(f"  {split_name} parquet files: {split_summary['total_parquet_files']}")
+        for dataset_name, count in split_summary["datasets"].items():
+            print(f"    {dataset_name}: {count}")
+    if summary["missing_or_empty_datasets"]:
+        print(f"  WARNING missing/empty datasets: {summary['missing_or_empty_datasets']}")
 
 
 def build_future_predictor(config: dict[str, Any], *, state_dim: int) -> FutureLatentPredictor:
@@ -457,6 +483,17 @@ def main() -> None:
         device = torch.device("cpu")
 
     dataset_config = build_dataset_config(config, split="train")
+    if rank == 0:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        dataset_summary = parquet_file_summary(
+            data_root=dataset_config.data_root,
+            include_datasets=dataset_config.include_datasets,
+            val_fraction=dataset_config.val_fraction,
+            seed=dataset_config.seed,
+        )
+        print_dataset_file_summary(dataset_summary)
+        save_json(output_dir / "dataset_file_summary.json", dataset_summary)
+
     if config["model"].get("state_dim") is None:
         state_dim = infer_state_dim(
             data_root=dataset_config.data_root,

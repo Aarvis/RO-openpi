@@ -44,7 +44,7 @@
     "min_lr_ratio": 0.05,
     "clip_grad_norm": 1.0,
     "precision": "fp16",
-    "num_workers": 2,
+    "num_workers": 0,
     "val_num_workers": 0,
     "val_every_steps": 1000,
     "val_batches": 100,

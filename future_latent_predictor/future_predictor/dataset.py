@@ -135,6 +135,70 @@ def find_parquet_files(data_root: Path, include_datasets: tuple[str, ...]) -> li
     return sorted(files)
 
 
+def parquet_file_summary(
+    *,
+    data_root: Path,
+    include_datasets: tuple[str, ...] = (),
+    val_fraction: float = 0.0,
+    seed: int = 42,
+) -> dict[str, object]:
+    if include_datasets:
+        roots = [(dataset_name, data_root / dataset_name) for dataset_name in include_datasets]
+    else:
+        roots = [(data_root.name, data_root)]
+
+    root_summaries: list[dict[str, object]] = []
+    all_files: list[Path] = []
+    for dataset_name, root in roots:
+        files = sorted(root.rglob("*.parquet"))
+        all_files.extend(files)
+        root_summaries.append(
+            {
+                "dataset": dataset_name,
+                "path": str(root),
+                "exists": root.exists(),
+                "is_symlink": root.is_symlink(),
+                "resolved_path": str(root.resolve()) if root.exists() or root.is_symlink() else None,
+                "parquet_files": len(files),
+            }
+        )
+
+    all_files = sorted(all_files)
+    train_files = split_files(
+        all_files,
+        data_root=data_root,
+        split="train",
+        val_fraction=val_fraction,
+        seed=seed,
+    )
+    val_files = split_files(
+        all_files,
+        data_root=data_root,
+        split="val",
+        val_fraction=val_fraction,
+        seed=seed,
+    )
+
+    def split_summary(files: list[Path]) -> dict[str, object]:
+        groups = group_files_by_dataset(files, data_root=data_root)
+        return {
+            "total_parquet_files": len(files),
+            "datasets": {dataset_name: len(dataset_files) for dataset_name, dataset_files in groups.items()},
+        }
+
+    return {
+        "data_root": str(data_root),
+        "include_datasets": list(include_datasets),
+        "configured_roots": root_summaries,
+        "total_parquet_files": len(all_files),
+        "missing_or_empty_datasets": [
+            summary["dataset"] for summary in root_summaries if int(summary["parquet_files"]) == 0
+        ],
+        "train": split_summary(train_files),
+        "val": split_summary(val_files),
+    }
+
+
 def split_files(files: list[Path], *, data_root: Path, split: str, val_fraction: float, seed: int) -> list[Path]:
     if split not in {"train", "val"}:
         raise ValueError(f"split must be 'train' or 'val', got {split!r}")
