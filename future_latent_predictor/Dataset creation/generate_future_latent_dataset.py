@@ -14,6 +14,7 @@ from typing import Any
 
 import flax.nnx as nnx
 import jax
+import jax.numpy as jnp
 import numpy as np
 from tqdm.auto import tqdm
 
@@ -324,21 +325,33 @@ def _extract_frame_embeddings(
 ) -> list[_FrameEmbedding]:
     obs = _observation_from_items([item for _, item, _ in frames])
     obs = _model.preprocess_observation(None, obs, train=False)
-    batch_embeddings = {}
+    batch_embeddings: dict[str, np.ndarray] = {}
+    valid_camera_names = []
+    valid_camera_images = []
     for camera_name in CAMERA_TO_COLUMN:
         camera_has_valid_image = any(
             bool(np.asarray(item["image_mask"][camera_name]).item())
             for _, item, _ in frames
         )
         if camera_has_valid_image:
-            batch_embeddings[camera_name] = jax.device_get(
-                _extract_one_image_embedding(model, obs.images[camera_name])
-            )
+            valid_camera_names.append(camera_name)
+            valid_camera_images.append(obs.images[camera_name])
         else:
             batch_embeddings[camera_name] = np.zeros(
                 (len(frames), *EMBEDDING_SHAPE),
                 dtype=np.float32,
             )
+
+    if valid_camera_images:
+        stacked_images = jnp.concatenate(valid_camera_images, axis=0)
+        stacked_embeddings = np.asarray(
+            jax.device_get(_extract_one_image_embedding(model, stacked_images))
+        )
+        for camera_index, camera_name in enumerate(valid_camera_names):
+            start = camera_index * len(frames)
+            end = start + len(frames)
+            batch_embeddings[camera_name] = stacked_embeddings[start:end]
+
     entries = []
     for batch_index, (raw, item, source_index) in enumerate(frames):
         entries.append(
