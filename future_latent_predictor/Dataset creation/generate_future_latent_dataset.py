@@ -60,6 +60,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--shard-size", type=int, default=512)
     parser.add_argument(
+        "--read-workers",
+        type=int,
+        default=2,
+        help=(
+            "Number of background threads per GPU worker used to read and transform dataset rows. "
+            "Set to 0 to read synchronously in the main thread."
+        ),
+    )
+    parser.add_argument(
+        "--read-prefetch-batches",
+        type=int,
+        default=2,
+        help=(
+            "Number of batches to keep prefetched per GPU worker. Higher values can improve GPU feeding but use more RAM."
+        ),
+    )
+    parser.add_argument(
         "--max-pending-shard-writes",
         type=int,
         default=2,
@@ -139,6 +156,10 @@ def _child_command(args: argparse.Namespace, *, worker_index: int, num_workers: 
         str(args.batch_size),
         "--shard-size",
         str(args.shard_size),
+        "--read-workers",
+        str(args.read_workers),
+        "--read-prefetch-batches",
+        str(args.read_prefetch_batches),
         "--max-pending-shard-writes",
         str(args.max_pending_shard_writes),
         "--embedding-dtype",
@@ -595,6 +616,7 @@ def _process_spec(
     progress_total = frame_end - frame_start
     progress_started_at = time.monotonic()
     progress_phase = "starting"
+    debug_image_lock = threading.Lock()
     max_pending_writes = max(1, int(args.max_pending_shard_writes))
     write_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     pending_writes: list[concurrent.futures.Future] = []
@@ -730,39 +752,81 @@ def _process_spec(
 
     try:
         _refresh_progress_postfix(refresh=False)
-        progress_phase = "reading"
         stop = False
-        for source_index in range(frame_start, frame_end):
+
+        def read_one(source_index: int) -> tuple[dict[str, Any], dict[str, Any], int] | None:
             try:
                 raw = dict(raw_dataset[source_index])
                 item = _apply_transforms(raw, transforms)
-                _save_debug_start_images(item=item, source_index=source_index, spec=spec, args=args)
+                with debug_image_lock:
+                    _save_debug_start_images(item=item, source_index=source_index, spec=spec, args=args)
+                return raw, item, source_index
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Skipping %s index %s: %s", spec.repo_id, source_index, exc)
+                return None
+
+        def add_read_result(result: tuple[dict[str, Any], dict[str, Any], int] | None) -> bool:
+            nonlocal num_skipped
+            if result is None:
                 num_skipped += 1
                 progress.update(1)
                 _refresh_progress_postfix(refresh=False)
-                continue
+                return False
 
-            frame_batch.append((raw, item, source_index))
+            frame_batch.append(result)
             if len(frame_batch) >= args.batch_size:
-                stop = flush_frame_batch()
-            if stop:
-                break
+                return flush_frame_batch()
+            return False
+
+        progress_phase = "reading"
+        if args.read_workers <= 0:
+            for source_index in range(frame_start, frame_end):
+                stop = add_read_result(read_one(source_index))
+                if stop:
+                    break
+        else:
+            max_pending_reads = max(1, int(args.read_prefetch_batches)) * int(args.batch_size)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=int(args.read_workers)) as read_executor:
+                pending_reads: dict[int, concurrent.futures.Future] = {}
+                next_source_index = frame_start
+                next_consume_index = frame_start
+
+                def submit_reads() -> None:
+                    nonlocal next_source_index
+                    while next_source_index < frame_end and len(pending_reads) < max_pending_reads:
+                        pending_reads[next_source_index] = read_executor.submit(read_one, next_source_index)
+                        next_source_index += 1
+
+                submit_reads()
+                while pending_reads and next_consume_index < frame_end:
+                    submit_reads()
+                    future = pending_reads.pop(next_consume_index)
+                    progress_phase = "reading"
+                    stop = add_read_result(future.result())
+                    if stop:
+                        for future in pending_reads.values():
+                            future.cancel()
+                        break
+                    next_consume_index += 1
+                    submit_reads()
 
         if not stop and frame_batch:
             flush_frame_batch()
     finally:
+        had_error = sys.exc_info()[0] is not None
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=2.0)
         _refresh_progress_postfix(refresh=True)
         progress.close()
+        if had_error:
+            write_executor.shutdown(wait=False, cancel_futures=True)
 
-    if shard_rows:
-        schedule_shard_write(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
-        shard_rows = []
-
-    finish_pending_writes()
+    try:
+        if shard_rows:
+            schedule_shard_write(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
+            shard_rows = []
+    finally:
+        finish_pending_writes()
 
     _write_dataset_metadata(
         output_dir=output_dir,
