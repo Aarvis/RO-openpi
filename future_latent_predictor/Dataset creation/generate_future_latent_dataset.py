@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import dataclasses
 import json
 import logging
@@ -58,6 +59,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--future-offset", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--shard-size", type=int, default=512)
+    parser.add_argument(
+        "--max-pending-shard-writes",
+        type=int,
+        default=2,
+        help=(
+            "Maximum number of parquet shard writes allowed to run in the background per worker. "
+            "Higher values overlap writing with GPU encoding more, but use more host RAM."
+        ),
+    )
     parser.add_argument("--max-rows-per-dataset", type=int, default=None)
     parser.add_argument("--embedding-dtype", choices=("float16", "float32"), default="float16")
     parser.add_argument(
@@ -129,6 +139,8 @@ def _child_command(args: argparse.Namespace, *, worker_index: int, num_workers: 
         str(args.batch_size),
         "--shard-size",
         str(args.shard_size),
+        "--max-pending-shard-writes",
+        str(args.max_pending_shard_writes),
         "--embedding-dtype",
         args.embedding_dtype,
         "--num-gpu-workers",
@@ -583,6 +595,47 @@ def _process_spec(
     progress_total = frame_end - frame_start
     progress_started_at = time.monotonic()
     progress_phase = "starting"
+    max_pending_writes = max(1, int(args.max_pending_shard_writes))
+    write_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    pending_writes: list[concurrent.futures.Future] = []
+
+    def reap_completed_writes() -> None:
+        nonlocal pending_writes
+        remaining = []
+        for future in pending_writes:
+            if future.done():
+                future.result()
+            else:
+                remaining.append(future)
+        pending_writes = remaining
+
+    def wait_for_write_slot() -> None:
+        nonlocal progress_phase
+        reap_completed_writes()
+        while len(pending_writes) >= max_pending_writes:
+            progress_phase = "waiting_write_slot"
+            done, _ = concurrent.futures.wait(
+                pending_writes,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                future.result()
+            reap_completed_writes()
+
+    def schedule_shard_write(rows: list[dict[str, Any]], output_path: Path) -> None:
+        nonlocal progress_phase
+        wait_for_write_slot()
+        progress_phase = "scheduling_write"
+        pending_writes.append(write_executor.submit(_write_shard, rows, output_path))
+        progress_phase = "pairing"
+
+    def finish_pending_writes() -> None:
+        nonlocal progress_phase
+        progress_phase = "waiting_writes"
+        for future in pending_writes:
+            future.result()
+        pending_writes.clear()
+        write_executor.shutdown(wait=True)
 
     def flush_frame_batch() -> bool:
         nonlocal frame_batch, num_rows, num_skipped, shard_index, shard_rows, progress_phase
@@ -615,8 +668,8 @@ def _process_spec(
             shard_rows.append(row)
             num_rows += 1
             if len(shard_rows) >= args.shard_size:
-                progress_phase = "writing"
-                _write_shard(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
+                progress_phase = "scheduling_write"
+                schedule_shard_write(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
                 shard_rows = []
                 shard_index += 1
                 progress_phase = "pairing"
@@ -628,6 +681,7 @@ def _process_spec(
         return False
 
     if frame_start >= frame_end:
+        write_executor.shutdown(wait=True)
         _write_dataset_metadata(
             output_dir=output_dir,
             train_config=train_config,
@@ -705,7 +759,10 @@ def _process_spec(
         progress.close()
 
     if shard_rows:
-        _write_shard(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
+        schedule_shard_write(shard_rows, _shard_path(output_dir, shard_index=shard_index, args=args))
+        shard_rows = []
+
+    finish_pending_writes()
 
     _write_dataset_metadata(
         output_dir=output_dir,
