@@ -67,6 +67,15 @@ def parse_args() -> argparse.Namespace:
             "Set to 1 to run in the current process."
         ),
     )
+    parser.add_argument(
+        "--worker-launch-stagger-seconds",
+        type=float,
+        default=8.0,
+        help=(
+            "Seconds to wait between launching GPU worker subprocesses. This reduces simultaneous CUDA/XLA "
+            "initialization pressure on large multi-GPU nodes. Set to 0 to disable."
+        ),
+    )
     parser.add_argument("--worker-index", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--num-workers", type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument(
@@ -123,6 +132,8 @@ def _child_command(args: argparse.Namespace, *, worker_index: int, num_workers: 
         args.embedding_dtype,
         "--num-gpu-workers",
         "1",
+        "--worker-launch-stagger-seconds",
+        "0",
         "--worker-index",
         str(worker_index),
         "--num-workers",
@@ -162,6 +173,10 @@ def _maybe_launch_gpu_workers(args: argparse.Namespace) -> bool:
         command = _child_command(args, worker_index=worker_index, num_workers=num_workers)
         logging.info("Starting worker %s/%s on GPU %s", worker_index, num_workers, gpu_id)
         processes.append(subprocess.Popen(command, env=env))  # noqa: S603
+        launch_delay = float(args.worker_launch_stagger_seconds)
+        if launch_delay > 0 and worker_index + 1 < num_workers:
+            logging.info("Waiting %.1fs before launching next worker", launch_delay)
+            time.sleep(launch_delay)
 
     failed = []
     for worker_index, process in enumerate(processes):
