@@ -92,8 +92,6 @@ class DataConfig:
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
-    # If provided, overrides any dataset/default prompt before prompt tokenization.
-    forced_prompt: str | None = None
     # If true, the dataset already stores full action chunks per sample and the loader must not
     # reconstruct them from future timesteps using delta_timestamps.
     prechunked_actions: bool = False
@@ -467,6 +465,7 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
     dataset_joint_order_csv: str = (
         "shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper"
     )
+    forced_prompt: str | None = None
     # damping: float = 0.05
     damping: float = 0.05
     alpha: float = 1.0
@@ -553,6 +552,11 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
             )
 
         model_transforms = ModelTransformFactory()(model_config)
+        if self.forced_prompt is not None:
+            model_transforms = _transforms.Group(
+                inputs=[_transforms.SetPrompt(self.forced_prompt), *model_transforms.inputs],
+                outputs=model_transforms.outputs,
+            )
 
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
@@ -747,11 +751,15 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
         )
         base_config = self.create_base_config(assets_dirs, model_config)
         model_transforms = ModelTransformFactory()(model_config)
+        if self.forced_prompt is not None:
+            model_transforms = _transforms.Group(
+                inputs=[_transforms.SetPrompt(self.forced_prompt), *model_transforms.inputs],
+                outputs=model_transforms.outputs,
+            )
         return dataclasses.replace(
             base_config,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
-            forced_prompt=self.forced_prompt,
             action_sequence_keys=("actions",),
             multi_dataset_specs=self.dataset_specs,
             multi_state_unit=self.state_unit,
@@ -1500,6 +1508,7 @@ _CONFIGS = [
                 lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_top_camera_config_runtime_cv_no_flip.json"
             ),
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            forced_prompt="fold the garment on the table",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=220,

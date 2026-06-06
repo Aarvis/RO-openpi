@@ -145,7 +145,6 @@ def create_trained_policy(
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
             transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
-            transforms.SetPrompt(data_config.forced_prompt),
             *data_config.model_transforms.inputs,
         ],
         output_transforms=[
