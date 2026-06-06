@@ -92,6 +92,8 @@ class DataConfig:
 
     # If true, will use the LeRobot dataset task to define the prompt.
     prompt_from_task: bool = False
+    # If provided, overrides any dataset/default prompt before prompt tokenization.
+    forced_prompt: str | None = None
     # If true, the dataset already stores full action chunks per sample and the loader must not
     # reconstruct them from future timesteps using delta_timestamps.
     prechunked_actions: bool = False
@@ -745,15 +747,11 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
         )
         base_config = self.create_base_config(assets_dirs, model_config)
         model_transforms = ModelTransformFactory()(model_config)
-        if self.forced_prompt is not None:
-            model_transforms = _transforms.Group(
-                inputs=[_transforms.SetPrompt(self.forced_prompt), *model_transforms.inputs],
-                outputs=model_transforms.outputs,
-            )
         return dataclasses.replace(
             base_config,
             data_transforms=data_transforms,
             model_transforms=model_transforms,
+            forced_prompt=self.forced_prompt,
             action_sequence_keys=("actions",),
             multi_dataset_specs=self.dataset_specs,
             multi_state_unit=self.state_unit,
