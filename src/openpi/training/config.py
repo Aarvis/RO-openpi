@@ -1041,6 +1041,8 @@ class TrainConfig:
 
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
+    # If true, logs a few first-batch camera images to wandb. Keep disabled for large/future-latent runs.
+    log_first_batch_images: bool = False
 
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
