@@ -35,16 +35,16 @@ export MKL_NUM_THREADS=1
 hf auth login
 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
 
-hf download huggingaccounttest/lehome_all_top_garment \
+hf download huggingaccounttest/lehome_all_garment_data \
   --repo-type dataset \
-  --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_top_garment"
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data"
 
 
 $env:CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
 
-python "openpi\future_latent_predictor\Dataset creation\generate_future_latent_dataset.py" `
+python "future_latent_predictor\Dataset creation\generate_future_latent_dataset.py" `
   --config-name pi05_lehome_camera_cv_robot_finetune_future_latent `
-  --output-dir "openpi\future_latent_predictor\Dataset creation\output" `
+  --output-dir "\ephemeral\future_latent_predictor\generated_sim_root\output" `
   --future-offset 10 `
   --batch-size 8 `
   --shard-size 512 `

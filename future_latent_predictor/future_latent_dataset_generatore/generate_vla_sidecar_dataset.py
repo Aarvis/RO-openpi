@@ -171,9 +171,14 @@ def enabled_specs(config_name: str) -> list[_config.LehomeCameraCVDatasetSpec]:
             raise TypeError(f"Expected LehomeCameraCVDatasetSpec, got {type(spec)}")
         if spec.include_in_future_latent_dataset:
             specs.append(spec)
-    if not specs:
-        raise ValueError(f"No datasets have include_in_future_latent_dataset=True in config {config_name!r}")
-    return specs
+    if specs:
+        return specs
+
+    repo_id = getattr(data_config, "repo_id", None) or getattr(train_config.data, "repo_id", None)
+    if repo_id:
+        return [_config.LehomeCameraCVDatasetSpec(repo_id=str(repo_id), include_in_future_latent_dataset=True)]
+
+    raise ValueError(f"No datasets have include_in_future_latent_dataset=True in config {config_name!r}")
 
 
 @dataclasses.dataclass(frozen=True)
