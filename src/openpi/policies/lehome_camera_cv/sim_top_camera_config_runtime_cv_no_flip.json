@@ -1,0 +1,136 @@
+{
+  "source_capture_json": "D:\\LeHome-Challenge\\lehome-challenge\\dik_solver_workflow\\output\\episode_200_world_pose_capture.json",
+  "source_frame": "top_camera (OpenCV optical frame)",
+  "matrix_layout_interpretation": "row-vector (transposed to column-vector standard)",
+  "camera_frame": {
+    "x": "right",
+    "y": "down",
+    "z": "forward"
+  },
+  "camera_frame_z_flip_180": {
+    "enabled": false,
+    "description": "Optional transform for a 180 degree top-image rotation about the camera optical Z axis. Enable only when top-camera images are flipped by 180 degrees and state/action poses are expressed in this camera CV frame.",
+    "applies_to": [
+      "camera_frame_16d_observation_pose",
+      "camera_frame_16d_action_pose"
+    ],
+    "do_not_apply_to": [
+      "raw_12d_joint_angles"
+    ],
+    "position_rule": "pos_flipped = R_flip @ pos; equivalent to [x, y, z] -> [-x, -y, z]",
+    "orientation_rule": "For wxyz quaternions, left-multiply by q_flip_wxyz: q_flipped = q_flip_wxyz \u2297 q. Do not right-multiply.",
+    "R_flip": [
+      [
+        -1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "q_flip_wxyz": [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "q_flip_xyzw": [
+      0.0,
+      0.0,
+      1.0,
+      0.0
+    ],
+    "pose_8d_layout": [
+      "x",
+      "y",
+      "z",
+      "qw",
+      "qx",
+      "qy",
+      "qz",
+      "gripper"
+    ],
+    "pose_16d_layout": {
+      "left": [
+        0,
+        8
+      ],
+      "right": [
+        8,
+        16
+      ]
+    },
+    "pipeline_note": "If source data is raw 12D joint angles, first run FK into camera-frame 16D pose, then apply this flip transform."
+  },
+  "position_xyz_m": [
+    -0.015000000596046392,
+    0.43999999761581426,
+    0.5599999725818634
+  ],
+  "orientation_quat_wxyz": [
+    -1.0106263644939007e-17,
+    6.039257315095647e-17,
+    0.9862855672836304,
+    -0.1650478105519956
+  ],
+  "orientation_quat_xyzw": [
+    6.039257315095647e-17,
+    0.9862855672836304,
+    -0.1650478105519956,
+    -1.0106263644939007e-17
+  ],
+  "T_world_camera": [
+    [
+      -1.0,
+      1.1579261316490167e-16,
+      -3.9870647888666396e-17,
+      -0.015000000596046392
+    ],
+    [
+      1.2246467991473532e-16,
+      0.9455184404639851,
+      -0.32556854691839227,
+      0.43999999761581426
+    ],
+    [
+      0.0,
+      -0.32556854691839227,
+      -0.9455184404639851,
+      0.5599999725818634
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "conversion_from_usd": {
+    "R_usd_from_cv": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        -1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        -1.0
+      ]
+    ],
+    "equation": "T_world_cam_cv = T_world_cam_usd @ block_diag(R_usd_from_cv,1)"
+  }
+}

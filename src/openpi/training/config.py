@@ -1460,7 +1460,7 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=10,
-            discrete_state_input=False,
+            discrete_state_input=True,
             future_latent=pi0_config.FutureLatentConfig(
                 enabled=True,
                 num_cameras=3,
@@ -1497,8 +1497,10 @@ _CONFIGS = [
             output_action_dim=12,
             state_unit="rad",
             pose_quat_order="wxyz",
-            fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
-            camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
+            fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common.json"),
+            camera_config_json_path=str(
+                lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_top_camera_config_runtime_cv_no_flip.json"
+            ),
             dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
