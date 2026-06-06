@@ -647,14 +647,14 @@ python -m parallel_eval --headless --enable_cameras   --garment_type custom   --
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 14   --gpu_ids 0,1,2,3,4,5,6,7,8,9,10,11,12,13   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 5  --max_workers 1   --gpu_ids 0 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://81.183.231.113:54949 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:8045,ws://20.150.146.205:8779 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://34.27.194.137:8003,ws://34.27.194.137:8004,ws://34.27.194.137:8000,ws://34.27.194.137:8001,ws://34.27.194.137:8002 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 4   --gpu_ids 0,1,2,3  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://38.79.155.163:61163,ws://38.79.155.163:61669,ws://38.79.155.163:61650,ws://38.79.155.163:61289 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:5275,ws://20.150.146.205:8601 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
@@ -662,7 +662,7 @@ python -m parallel_eval   --headless   --enable_cameras   --garment_type custom 
 python -m round2_sim_inference_eval_test \
   --headless \
   --enable_cameras \
-  --policy_server_addr http://146.115.17.138:62328 \
+  --policy_server_addr 81.183.231.113:54949 \
   --actions_per_chunk 5 \
   --garment_type custom \
   --num_episodes 5 \
@@ -687,6 +687,7 @@ python .\Datasets\OnlineRL\2_create_monte_carlo_all_rewarded_episodes.py `
   --config "E:\LeHome-Challenge\lehome-challenge\Datasets\OnlineRL\config.json" `
   --workers 8 `
   --overwrite
+
 
 
 

@@ -14,13 +14,18 @@ hf upload huggingaccounttest/lehome_train_episodes \
   . \
   --repo-type dataset && \
 hf repos settings huggingaccounttest/lehome_train_episodes \
-  --repo-type dataset \
+  --repo-type dataset 
   --gated manual
 
 hf upload huggingaccounttest/lehome_all_garment_data \
   "/workspace/.hf_home/lerobot/local/lehome_all_garment_data" \
   . \
   --repo-type dataset
+
+hf upload huggingaccounttest/robot_future_latents_depedency_cotrain_final \
+  "/ephemeral2/robot_future_latents_depedency_cotrain_final" \
+  . \
+  --repo-type model
 
 
 hf upload huggingaccounttest/lehome_pretrain_all_garment_data \
@@ -60,6 +65,16 @@ hf repos settings huggingaccounttest/lehome_val_episodes \
 hf upload huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_20_epoch\
   "/workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/lehome_pretrain_base_robot_ft_both_with_state_all_garment/21100" \
   . \
+  --repo-type model
+
+
+hf upload huggingaccounttest/cotrain_base_ah10_robot_only_polish3\
+  "~/lehome-openpi/checkpoints/pi05_lehome_camera_cv_multi_cotrain_robot_finetune/cotrain_base_ah10_robot_only_polish6/3500" \
+  . \
+  --repo-type model
+
+hf download huggingaccounttest/cotrain_base_ah10_robot_only_polish3\
+  --local-dir ./cotrain_base_ah10_robot_only_polish3 \
   --repo-type model
 
 
@@ -195,7 +210,7 @@ export TMPDIR=/ephemeral2/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.95
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
@@ -213,7 +228,7 @@ export HF_DATASETS_CACHE=/ephemeral2/.hf_home/datasets
 export TMPDIR=/ephemeral2/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
@@ -223,16 +238,16 @@ export MKL_NUM_THREADS=1
 
 
 uv run scripts/multi_serve_policy.py \
-  --num-servers 1 \
+  --num-servers 4 \
   --start-port 8000 \
   --gpu-id 0 \
-  --total-gpu-fraction 0.80 \
+  --total-gpu-fraction 0.95 \
   --xla-preallocate \
   --log-dir logs/multi_serve_policy_future_latent \
   -- \
   policy:checkpoint \
   --policy.config pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
-  --policy.dir /ephemeral2/cotrain_base_future_latent_sim_only_trial_200
+  --policy.dir /workspace/LEHOME/lehome-openpi/cotrain_base_future_latent_sim_only_trial_1500
 
 
 mkdir -p /scratch/cache/openpi
@@ -319,14 +334,14 @@ hf download lehome/dataset_challenge_real --repo-type dataset --local-dir "D:\Le
 huggingaccounttest/lehome_train_episodes
 
 
-hf download huggingaccounttest/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch \
+hf download huggingaccounttest/cotrain_base_future_latent_sim_only_trial_1500 \
   --repo-type model \
-  --local-dir "/ephemeral2/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch"
+  --local-dir "/workspace/LEHOME/lehome-openpi/cotrain_base_future_latent_sim_only_trial_1500"
 
 
-hf download huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3 \
+hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
   --repo-type model \
-  --local-dir "/ephemeral2/robot_future_latents_dependency_multi_cotrain_base3"
+  --local-dir "/workspace/LEHOME/lehome-openpi/robot_future_latents_dependency_multi_cotrain_base3"
 
 hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
   --repo-type model \

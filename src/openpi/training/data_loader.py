@@ -15,6 +15,7 @@ import torch
 import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
+import openpi.training.future_latent_sidecar as _future_latent_sidecar
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -187,9 +188,22 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             )
         norm_stats = data_config.norm_stats
 
+    transforms: list[_transforms.DataTransformFn] = []
+    if data_config.future_latent_sidecar_root is not None:
+        if data_config.repo_id is None:
+            raise ValueError("Repo ID is not set. Cannot load future latent sidecar.")
+        transforms.append(
+            _future_latent_sidecar.FutureLatentSidecarTransform(
+                sidecar_root=data_config.future_latent_sidecar_root,
+                source_repo_id=data_config.repo_id,
+                required=data_config.future_latent_sidecar_required,
+            )
+        )
+
     return TransformedDataset(
         dataset,
         [
+            *transforms,
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
             _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),

@@ -469,7 +469,7 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
     damping: float = 0.05
     alpha: float = 1.0
     # line_search_alphas_csv: str = "1,0.5,0.25,0.05,1.5,2"
-    line_search_alphas_csv: str = "1,0.5"
+    line_search_alphas_csv: str = "1"
     fallback_tol_factor: float = 1.1
     pos_weight: float = 1.0
     rot_weight: float = 1.0
@@ -482,6 +482,16 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        future_latent_repack = (
+            {
+                "future_latent_pred": "future_latent/pred",
+                "future_latent_true": "future_latent/true",
+                "future_latent_valid_mask": "future_latent/valid_mask",
+            }
+            if self.base_config is not None
+            and self.base_config.future_latent_sidecar_root is not None
+            else {}
+        )
         repack_transform = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
@@ -492,6 +502,7 @@ class LeRobotLehomeCameraCVDataConfig(DataConfigFactory):
                         "observation/state": "observation.state",
                         "actions": "actions",
                         "prompt": "prompt",
+                        **future_latent_repack,
                     }
                 )
             ]
@@ -676,14 +687,14 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
     inference_target_image_width: int | None = None
     damping: float = 0.05
     alpha: float = 1.0
-    line_search_alphas_csv: str = "1,0.5"
+    line_search_alphas_csv: str = "1"
     fallback_tol_factor: float = 1.1
     pos_weight: float = 1.0
     rot_weight: float = 1.0
-    max_iters: int = 50
+    max_iters: int = 10
     tol_pos_m: float = 1e-4
     tol_rot_deg: float = 0.2
-    max_step_norm: float = 0.2
+    max_step_norm: float = 2.0
     enforce_limits: bool = True
     future_latent_sidecar_root: str | None = None
     future_latent_filter_included_datasets: bool = False
@@ -1024,9 +1035,6 @@ class TrainConfig:
 
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
-    # If true, logs first-batch camera views to wandb. Disabled by default because this copies sharded JAX image
-    # batches back to host at startup and can stress unstable CUDA driver states.
-    log_first_batch_images: bool = False
 
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
@@ -1447,6 +1455,73 @@ _CONFIGS = [
         max_to_keep=4,
     ),
     TrainConfig(
+        # Single-dataset LeHome robot fine-tune with future-latent conditioning enabled.
+        name="pi05_lehome_camera_cv_robot_finetune_future_latent",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            future_latent=pi0_config.FutureLatentConfig(
+                enabled=True,
+                num_cameras=3,
+                latent_tokens=24,
+                latent_dim=512,
+                adapter_hidden_dim=1024,
+                output_dim=2048,
+                predicted_latent_prob=0.50,
+                true_latent_prob=0.30,
+                dropped_latent_prob=0.20,
+                sidecar_root="/scratch/vla_future_latent_sidecar/output",
+                resampler_checkpoint_path="/scratch/future_latent_runs/resampler_autoencoder_v1/resampler_encoder_latest.pt",
+                future_predictor_checkpoint_path="/scratch/future_latent_runs/future_predictor_v1/future_predictor_latest.pt",
+                freeze_image_encoder=True,
+                freeze_resampler=True,
+                freeze_future_predictor=True,
+            ),
+        ),
+        num_workers=32,
+        run_val=False,
+        checkpoint_strategy="manual",
+        val_repo_id="local/lehome_val_episodes",
+        val_frequency=1000,
+        val_batch_size=400,
+        data=LeRobotLehomeCameraCVDataConfig(
+            repo_id="local/lehome_all_top_garment",
+            base_config=DataConfig(
+                prompt_from_task=True,
+                future_latent_sidecar_root="/scratch/vla_future_latent_sidecar/output",
+                future_latent_sidecar_required=True,
+            ),
+            use_delta_joint_actions=False,
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+            fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
+            camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
+            dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=220,
+            peak_lr=5e-5,
+            decay_steps=2400,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*(lora|future_latent_adapter).*",
+        ),
+        freeze_filter=nnx_utils.PathRegex("PaliGemma/img/.*"),
+        non_adapter_lr_multiplier=0.1,
+        adapter_param_regex=".*future_latent_adapter.*",
+        num_train_steps=2400,
+        batch_size=192,
+        log_interval=50,
+        save_steps=(900,),
+        keep_period=None,
+        max_to_keep=4,
+    ),
+    TrainConfig(
         name="pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent",
         model=pi0_config.Pi0Config(
             pi05=True,
@@ -1462,7 +1537,7 @@ _CONFIGS = [
                 predicted_latent_prob=0.50,
                 true_latent_prob=0.30,
                 dropped_latent_prob=0.20,
-                sidecar_root="/ephemeral2/robot_future_latents_dependency_multi_cotrain_base3/vla_future_latent_sidecar",
+                sidecar_root="/scratch/vla_future_latent_sidecar/output",
                 resampler_checkpoint_path="/scratch/future_latent_runs/resampler_autoencoder_v1/resampler_encoder_latest.pt",
                 future_predictor_checkpoint_path="/scratch/future_latent_runs/future_predictor_v1/future_predictor_latest.pt",
                 freeze_image_encoder=True,
@@ -1480,7 +1555,7 @@ _CONFIGS = [
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_pretrain_all_garment_round2_data", #human_pretrain
                     sample_weight=1.6,
-                    include_in_future_latent_dataset=False,
+                    include_in_future_latent_dataset=True,
                     apply_camera_cv_transform=False,
                     fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
                     camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
@@ -1493,7 +1568,7 @@ _CONFIGS = [
                 ),
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_robot_sim_all_garment_round2_data", #robot_sim_dataset
-                    sample_weight=0.15,
+                    sample_weight=4.0,
                     include_in_future_latent_dataset=True,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common.json"),
@@ -1507,7 +1582,7 @@ _CONFIGS = [
                 ),
                 LehomeCameraCVDatasetSpec(
                     repo_id="local/lehome_robot_real_all_garment_round2_data", #robot_real_dataset
-                    sample_weight=1.0,
+                    sample_weight=8.0,
                     include_in_future_latent_dataset=True,
                     apply_camera_cv_transform=True,
                     fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
@@ -1541,15 +1616,15 @@ _CONFIGS = [
             output_action_dim=12,
             state_unit="rad",
             pose_quat_order="wxyz",
-            future_latent_sidecar_root="/ephemeral2/robot_future_latents_dependency_multi_cotrain_base3/vla_future_latent_sidecar",
+            future_latent_sidecar_root="/scratch/vla_future_latent_sidecar/output",
             future_latent_filter_included_datasets=True,
-            future_latent_sidecar_required=False,
+            future_latent_sidecar_required=True,
             use_sample_weights=True,
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=220,
             peak_lr=5e-5,
-            decay_steps=1800,
+            decay_steps=2400,
             decay_lr=5e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
@@ -1559,8 +1634,8 @@ _CONFIGS = [
         freeze_filter=nnx_utils.PathRegex("PaliGemma/img/.*"),
         non_adapter_lr_multiplier=0.1,
         adapter_param_regex=".*future_latent_adapter.*",
-        num_train_steps=1800,
-        batch_size=64,
+        num_train_steps=2400,
+        batch_size=192,
         log_interval=50,
         save_steps=(900,),
         keep_period=None,

@@ -21,6 +21,7 @@ from tqdm.auto import tqdm
 
 import openpi.models.model as _model
 import openpi.training.config as _config
+import openpi.training.data_loader as _data_loader
 import openpi.training.multi_dataset as _multi_dataset
 import openpi.training.weight_loaders as _weight_loaders
 import openpi.transforms as _transforms
@@ -33,6 +34,11 @@ CAMERA_TO_COLUMN = {
     "left_wrist_0_rgb": "left_wrist",
 }
 EMBEDDING_SHAPE = (256, 2048)
+FUTURE_LATENT_REPACK_KEYS = {
+    "future_latent_pred",
+    "future_latent_true",
+    "future_latent_valid_mask",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -245,6 +251,38 @@ def _enabled_specs(data_config: _config.DataConfig) -> list[_config.LehomeCamera
     return specs
 
 
+@dataclasses.dataclass(frozen=True)
+class _DatasetSource:
+    repo_id: str
+    raw_dataset: _data_loader.Dataset
+    transforms: list[_transforms.DataTransformFn]
+    dataset_spec: _config.LehomeCameraCVDatasetSpec | None = None
+
+
+def _strip_future_latent_repack_fields(transform: _transforms.DataTransformFn) -> _transforms.DataTransformFn:
+    if not isinstance(transform, _transforms.RepackTransform):
+        return transform
+
+    structure = {
+        key: value
+        for key, value in transform.structure.items()
+        if key not in FUTURE_LATENT_REPACK_KEYS
+    }
+    return _transforms.RepackTransform(structure)
+
+
+def _transforms_for_data_config(data_config: _config.DataConfig) -> list[_transforms.DataTransformFn]:
+    transforms: list[_transforms.DataTransformFn] = [
+        _strip_future_latent_repack_fields(transform)
+        for transform in data_config.repack_transforms.inputs
+    ]
+    transforms.extend(data_config.data_transforms.inputs)
+    if data_config.norm_stats is not None:
+        transforms.append(_transforms.Normalize(data_config.norm_stats, use_quantiles=data_config.use_quantile_norm))
+    transforms.extend(data_config.model_transforms.inputs)
+    return transforms
+
+
 def _transforms_for_spec(
     *,
     spec: _config.LehomeCameraCVDatasetSpec,
@@ -270,6 +308,49 @@ def _transforms_for_spec(
         transforms.append(_transforms.Normalize(data_config.norm_stats, use_quantiles=data_config.use_quantile_norm))
     transforms.extend(data_config.model_transforms.inputs)
     return transforms
+
+
+def _dataset_sources(
+    train_config: _config.TrainConfig,
+    data_config: _config.DataConfig,
+) -> list[_DatasetSource]:
+    if data_config.multi_dataset_specs:
+        sources = []
+        for spec in _enabled_specs(data_config):
+            sources.append(
+                _DatasetSource(
+                    repo_id=spec.repo_id,
+                    raw_dataset=_multi_dataset._create_lerobot_dataset(  # noqa: SLF001
+                        spec,
+                        action_horizon=train_config.model.action_horizon,
+                        prompt_from_task=data_config.prompt_from_task,
+                    ),
+                    transforms=_transforms_for_spec(
+                        spec=spec,
+                        train_config=train_config,
+                        data_config=data_config,
+                    ),
+                    dataset_spec=spec,
+                )
+            )
+        return sources
+
+    if data_config.repo_id is None:
+        raise ValueError(
+            f"Config {train_config.name!r} has neither multi_dataset_specs nor a single repo_id."
+        )
+
+    return [
+        _DatasetSource(
+            repo_id=data_config.repo_id,
+            raw_dataset=_data_loader.create_torch_dataset(
+                data_config,
+                action_horizon=train_config.model.action_horizon,
+                model_config=train_config.model,
+            ),
+            transforms=_transforms_for_data_config(data_config),
+        )
+    ]
 
 
 def _apply_transforms(sample: dict[str, Any], transforms: list[_transforms.DataTransformFn]) -> dict[str, Any]:
@@ -454,14 +535,14 @@ def _write_dataset_metadata(
     *,
     output_dir: Path,
     train_config: _config.TrainConfig,
-    spec: _config.LehomeCameraCVDatasetSpec,
+    source: _DatasetSource,
     args: argparse.Namespace,
     num_rows: int,
     num_skipped: int,
 ) -> None:
     payload = {
         "config_name": train_config.name,
-        "source_repo_id": spec.repo_id,
+        "source_repo_id": source.repo_id,
         "future_offset": args.future_offset,
         "num_rows": num_rows,
         "num_skipped": num_skipped,
@@ -477,7 +558,7 @@ def _write_dataset_metadata(
             "right_wrist_embedding_t_5",
             "left_wrist_embedding_t_5",
         ],
-        "dataset_spec": dataclasses.asdict(spec),
+        "dataset_spec": dataclasses.asdict(source.dataset_spec) if source.dataset_spec is not None else None,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_name = (
@@ -551,7 +632,7 @@ def _save_debug_start_images(
     *,
     item: dict[str, Any],
     source_index: int,
-    spec: _config.LehomeCameraCVDatasetSpec,
+    source_repo_id: str,
     args: argparse.Namespace,
 ) -> None:
     if args.worker_index != 0 or args.debug_start_image_count <= 0:
@@ -562,7 +643,7 @@ def _save_debug_start_images(
 
     from PIL import Image
 
-    dataset_name = _safe_dataset_name(spec.repo_id)
+    dataset_name = _safe_dataset_name(source_repo_id)
     debug_dir = args.output_dir / "debug_start_images" / dataset_name
     debug_dir.mkdir(parents=True, exist_ok=True)
     frame_index = saved_count
@@ -576,26 +657,21 @@ def _save_debug_start_images(
     setattr(args, "_debug_saved_start_image_count", saved_count + 1)
 
 
-def _process_spec(
+def _process_source(
     *,
     train_config: _config.TrainConfig,
-    data_config: _config.DataConfig,
-    spec: _config.LehomeCameraCVDatasetSpec,
+    source: _DatasetSource,
     model: _model.BaseModel,
     args: argparse.Namespace,
 ) -> None:
-    dataset_name = _safe_dataset_name(spec.repo_id)
+    dataset_name = _safe_dataset_name(source.repo_id)
     output_dir = args.output_dir / dataset_name
     if args.skip_existing and list(output_dir.glob("*.parquet")):
-        logging.info("Skipping %s because parquet shards already exist in %s", spec.repo_id, output_dir)
+        logging.info("Skipping %s because parquet shards already exist in %s", source.repo_id, output_dir)
         return
 
-    raw_dataset = _multi_dataset._create_lerobot_dataset(  # noqa: SLF001
-        spec,
-        action_horizon=train_config.model.action_horizon,
-        prompt_from_task=data_config.prompt_from_task,
-    )
-    transforms = _transforms_for_spec(spec=spec, train_config=train_config, data_config=data_config)
+    raw_dataset = source.raw_dataset
+    transforms = source.transforms
 
     embedding_dtype = np.float16 if args.embedding_dtype == "float16" else np.float32
     total_rows = max(0, len(raw_dataset) - args.future_offset)
@@ -681,7 +757,7 @@ def _process_spec(
             row = _row_from_embedding_pair(
                 current=current,
                 future=window[-1],
-                source_repo_id=spec.repo_id,
+                source_repo_id=source.repo_id,
                 embedding_dtype=embedding_dtype,
                 future_offset=args.future_offset,
             )
@@ -709,7 +785,7 @@ def _process_spec(
         _write_dataset_metadata(
             output_dir=output_dir,
             train_config=train_config,
-            spec=spec,
+            source=source,
             args=args,
             num_rows=0,
             num_skipped=0,
@@ -718,7 +794,7 @@ def _process_spec(
             "Worker %s/%s has no rows for %s",
             args.worker_index,
             args.num_workers,
-            spec.repo_id,
+            source.repo_id,
         )
         return
 
@@ -737,7 +813,7 @@ def _process_spec(
 
     progress = tqdm(
         total=progress_total,
-        desc=f"Embedding {spec.repo_id} worker {args.worker_index}/{args.num_workers}",
+        desc=f"Embedding {source.repo_id} worker {args.worker_index}/{args.num_workers}",
         unit="frame",
         position=args.worker_index,
         leave=True,
@@ -761,10 +837,15 @@ def _process_spec(
                 raw = dict(raw_dataset[source_index])
                 item = _apply_transforms(raw, transforms)
                 with debug_image_lock:
-                    _save_debug_start_images(item=item, source_index=source_index, spec=spec, args=args)
+                    _save_debug_start_images(
+                        item=item,
+                        source_index=source_index,
+                        source_repo_id=source.repo_id,
+                        args=args,
+                    )
                 return raw, item, source_index
             except Exception as exc:  # noqa: BLE001
-                logging.warning("Skipping %s index %s: %s", spec.repo_id, source_index, exc)
+                logging.warning("Skipping %s index %s: %s", source.repo_id, source_index, exc)
                 return None
 
         def add_read_result(result: tuple[dict[str, Any], dict[str, Any], int] | None) -> bool:
@@ -833,7 +914,7 @@ def _process_spec(
     _write_dataset_metadata(
         output_dir=output_dir,
         train_config=train_config,
-        spec=spec,
+        source=source,
         args=args,
         num_rows=num_rows,
         num_skipped=num_skipped,
@@ -843,7 +924,7 @@ def _process_spec(
         args.worker_index,
         args.num_workers,
         num_rows,
-        spec.repo_id,
+        source.repo_id,
         output_dir,
         num_skipped,
         row_start,
@@ -868,19 +949,18 @@ def main() -> None:
 
     train_config = _config.get_config(args.config_name)
     data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
-    specs = _enabled_specs(data_config)
-    if not specs:
+    sources = _dataset_sources(train_config, data_config)
+    if not sources:
         raise ValueError(
-            f"No dataset specs are enabled for future latent generation in config {args.config_name!r}."
+            f"No datasets are enabled for future latent generation in config {args.config_name!r}."
         )
 
     model = _load_model(train_config, params_path=args.params_path)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for spec in specs:
-        _process_spec(
+    for source in sources:
+        _process_source(
             train_config=train_config,
-            data_config=data_config,
-            spec=spec,
+            source=source,
             model=model,
             args=args,
         )
