@@ -161,6 +161,8 @@ tmux new -s train
 tmux attach -t train
 Ctrl-b d
 
+
+
 tmux new -s server
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train_weighted.py pi05_lehome_camera_cv_robot_finetune --exp-name lehome_cv_weighted_run1 --overwrite
@@ -321,6 +323,8 @@ python -m scripts.eval \
 
 
 uv pip install -e /workspace/LEHOME/lehome-openpi/packages/openpi-client
+
+uv pip install -e /home/ubuntu/LEHOME/lehome-openpi/packages/openpi-client
 
 uv run scripts/serve_policy.py \
   --port 8000 \
@@ -654,7 +658,7 @@ python -m parallel_eval   --headless   --enable_cameras   --garment_type custom 
 
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 4   --gpu_ids 0,1,2,3  --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://38.79.155.163:61163,ws://38.79.155.163:61669,ws://38.79.155.163:61650,ws://38.79.155.163:61289 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://142.170.45.54:41493,ws://142.170.45.54:41477,ws://142.170.45.54:41425,ws://142.170.45.54:41446 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:5275,ws://20.150.146.205:8601 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 

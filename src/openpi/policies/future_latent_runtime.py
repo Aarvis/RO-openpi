@@ -11,6 +11,7 @@ from torch import nn
 
 import openpi.models.pi0_config as pi0_config
 import openpi.shared.download as download
+import openpi.shared.future_latent_order as _future_latent_order
 
 from future_latent_predictor.future_predictor.model import FutureLatentPredictor
 from future_latent_predictor.resampler_autoencoder.model import CAMERAS
@@ -43,15 +44,24 @@ class FutureLatentRuntime:
         self._config = config
         self._device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._resampler = self._load_resampler(Path(download.maybe_download(config.resampler_checkpoint_path)))
+        self._policy_camera_order = _future_latent_order.POLICY_FUTURE_LATENT_CAMERA_ORDER
+        self._policy_reorder_indices = _future_latent_order.camera_reorder_indices(
+            self.cameras,
+            self._policy_camera_order,
+        )
         self._future_checkpoint_path = Path(download.maybe_download(config.future_predictor_checkpoint_path))
         self._future_checkpoint = torch.load(self._future_checkpoint_path, map_location="cpu")
         self._future_predictor: FutureLatentPredictor | None = None
         self._future_predictor_state_dim: int | None = None
         logger.info(
-            "Initialized future latent runtime on %s with resampler=%s future_predictor=%s",
+            "Initialized future latent runtime on %s with resampler=%s future_predictor=%s "
+            "runtime_camera_order=%s policy_camera_order=%s reorder_indices=%s",
             self._device,
             config.resampler_checkpoint_path,
             config.future_predictor_checkpoint_path,
+            self.cameras,
+            self._policy_camera_order,
+            self._policy_reorder_indices,
         )
 
     @property
@@ -173,6 +183,9 @@ class FutureLatentRuntime:
             current_latents = self._resampler.encode(embedding_tensor)
             prediction = predictor(current_latents, state_tensor)["prediction"]
             prediction = prediction * valid_tensor[:, :, None, None].to(prediction.dtype)
+            reorder = list(self._policy_reorder_indices)
+            prediction = prediction[:, reorder]
+            valid_tensor = valid_tensor[:, reorder]
 
         future_latent_pred = prediction.detach().cpu().numpy().astype(np.float32)
         future_latent_valid_mask = valid_tensor.detach().cpu().numpy().astype(bool)
@@ -183,4 +196,3 @@ class FutureLatentRuntime:
         result["future_latent_true"] = future_latent_pred
         result["future_latent_valid_mask"] = future_latent_valid_mask
         return result
-

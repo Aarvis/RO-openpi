@@ -22,8 +22,13 @@ hf upload huggingaccounttest/lehome_all_garment_data \
   . \
   --repo-type dataset
 
-hf upload huggingaccounttest/robot_future_latents_depedency_cotrain_final \
-  "/ephemeral2/robot_future_latents_depedency_cotrain_final" \
+
+ 
+
+
+
+hf upload huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch5 \
+  "/ephemeral/sim_future_latent_ft_from_base_v1_epoch5" \
   . \
   --repo-type model
 
@@ -129,7 +134,7 @@ export HF_DATASETS_CACHE=/workspace/.hf_home/datasets
 export TMPDIR=/workspace/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
 
 export OPENBLAS_NUM_THREADS=1
@@ -346,6 +351,56 @@ hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3
 hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
   --repo-type model \
   --local-dir "/ephemeral2/sim_future_latents_dependency_multi_cotrain_base3"
+
+
+hf download huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch10 \
+  --repo-type model \
+  --local-dir "/workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch10"
+
+
+uv run scripts/serve_policy.py \
+  --port 8000 \
+  policy:checkpoint \
+  --policy.config pi05_lehome_camera_cv_robot_finetune_future_latent \
+  --policy.dir /workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch10
+
+
+
+mkdir -p /workspace/cache/openpi
+export OPENPI_DATA_HOME=/workspace/cache/openpi
+export HF_HOME=/workspace/.hf_home
+export HUGGINGFACE_HUB_CACHE=/workspace/.hf_home/hub
+export HF_LEROBOT_HOME=/workspace/.hf_home/lerobot
+unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
+
+mkdir -p /workspace/tmp
+export HF_DATASETS_CACHE=/workspace/.hf_home/datasets
+export TMPDIR=/workspace/tmp
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
+
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+uv run --no-sync scripts/multi_serve_policy.py \
+  --num-servers 1 \
+  --start-port 8003 \
+  --gpu-id 3 \
+  --total-gpu-fraction 0.90 \
+  --xla-preallocate \
+  --log-dir logs/multi_serve_policy_future_latent_gpu3 \
+  -- \
+  policy:checkpoint \
+  --policy.config pi05_lehome_camera_cv_robot_finetune_future_latent \
+  --policy.dir /workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch10
+
+
+hf download huggingaccounttest/sim_only_trained_future_latents_sim_round_config \
+  --repo-type dataset \
+  --local-dir "/workspace/lehome-openpi/sim_only_trained_future_latents_sim_round_config" 
 
 
 hf download huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3 \

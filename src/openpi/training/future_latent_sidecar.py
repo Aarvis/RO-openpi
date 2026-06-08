@@ -8,11 +8,12 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+import openpi.shared.future_latent_order as _future_latent_order
 import openpi.transforms as _transforms
 
 
-CAMERAS = ("top", "right_wrist", "left_wrist")
-SAFE_CAMERA_TO_MODEL_ORDER = ("top", "left_wrist", "right_wrist")
+CAMERAS = _future_latent_order.SIDECAR_CAMERA_COLUMNS
+SAFE_CAMERA_TO_MODEL_ORDER = _future_latent_order.POLICY_FUTURE_LATENT_CAMERA_ORDER
 MODEL_CAMERA_TO_SIDECAR_CAMERA = {
     "top": "top",
     "left_wrist": "left_wrist",
@@ -189,4 +190,3 @@ class FutureLatentSidecarTransform(_transforms.DataTransformFn):
             "true": np.zeros(shape, dtype=np.float32),
             "valid_mask": np.zeros((len(SAFE_CAMERA_TO_MODEL_ORDER),), dtype=np.bool_),
         }
-
