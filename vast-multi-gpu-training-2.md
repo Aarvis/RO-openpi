@@ -43,36 +43,17 @@ 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
 
 
 hf download huggingaccounttest/pretrain_base_all_garment_4_epoch\
-  --local-dir ./cotrain_base_ah10_robot_only_polish3 \
+  --local-dir /ephemeral/pretrain_base_all_garment_4_epoch \
   --repo-type model
 
-
-mkdir -p "${HF_LEROBOT_HOME}/local/lehome_all_garment_data" && \
-hf download huggingaccounttest/lehome_all_garment_data \
-  --repo-type dataset \
-  --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data"
-
-hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
+hf download huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch10 \
   --repo-type model \
-  --local-dir "/workspace/LEHOME/lehome-openpi/robot_future_latents_dependency_multi_cotrain_base3"
+  --local-dir "/ephemeral/sim_future_latent_ft_from_base_v1_epoch10"
 
-hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
+hf download huggingaccounttest/sim_only_trained_future_latents_sim_round_config \
   --repo-type model \
-  --local-dir "/ephemeral2/sim_future_latents_dependency_multi_cotrain_base3"
+  --local-dir "/ephemeral/sim_only_trained_future_latents_sim_round_config"
 
-
-hf download huggingaccounttest/pretrain_base_all_garment_4_epoch \
-  --repo-type model \
-  --local-dir "/ephemeral2/pretrain_base_all_garment_4_epoch"
-
-
-  
-
-Update Training Config for Policy
-
-compute norm_stats for training data
-
-uv run scripts/compute_norm_stats.py --config-name pi05_lehome_camera_cv_robot_finetune
 
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.96 uv run scripts/train.py \

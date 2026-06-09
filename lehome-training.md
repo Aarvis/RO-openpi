@@ -658,12 +658,22 @@ python -m parallel_eval   --headless   --enable_cameras   --garment_type custom 
 
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://142.170.45.54:41493,ws://142.170.45.54:41477,ws://142.170.45.54:41425,ws://142.170.45.54:41446 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://74.15.135.156:40711,ws://74.15.135.156:40797,ws://74.15.135.156:40703,ws://74.15.135.156:40778 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+
+xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8  --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://38.117.87.46:43293,ws://38.117.87.46:40359,ws://38.117.87.46:46035,ws://38.117.87.46:44827 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+
+
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 1   --gpu_ids 0 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://74.15.135.156:40711 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+
+
 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://20.150.146.205:8045,ws://20.150.146.205:8779,ws://20.150.146.205:6517,ws://20.150.146.205:6494,ws://20.150.146.205:7981,ws://20.150.146.205:9801,ws://20.150.146.205:5275,ws://20.150.146.205:8601 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 
-python -m round2_sim_inference_eval_test \
+python -m round2_sim_inference_eval_test \  
   --headless \
   --enable_cameras \
   --policy_server_addr 81.183.231.113:54949 \

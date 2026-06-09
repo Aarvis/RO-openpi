@@ -44,7 +44,7 @@ class FutureLatentRuntime:
         self._config = config
         self._device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         self._resampler = self._load_resampler(Path(download.maybe_download(config.resampler_checkpoint_path)))
-        self._policy_camera_order = _future_latent_order.POLICY_FUTURE_LATENT_CAMERA_ORDER
+        self._policy_camera_order = tuple(config.policy_camera_order)
         self._policy_reorder_indices = _future_latent_order.camera_reorder_indices(
             self.cameras,
             self._policy_camera_order,

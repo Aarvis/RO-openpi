@@ -9,6 +9,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 import openpi.models.gemma as _gemma
 from openpi.shared import array_typing as at
+import openpi.shared.future_latent_order as _future_latent_order
 import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ class FutureLatentConfig:
     sidecar_root: str | None = None
     resampler_checkpoint_path: str | None = None
     future_predictor_checkpoint_path: str | None = None
+    policy_camera_order: tuple[str, ...] = _future_latent_order.POLICY_FUTURE_LATENT_CAMERA_ORDER
     freeze_image_encoder: bool = True
     freeze_resampler: bool = True
     freeze_future_predictor: bool = True
@@ -39,6 +41,11 @@ class FutureLatentConfig:
             raise ValueError(
                 "Future latent mixture probabilities must sum to 1.0, got "
                 f"{self.predicted_latent_prob} + {self.true_latent_prob} + {self.dropped_latent_prob} = {total}"
+            )
+        if self.enabled and len(self.policy_camera_order) != self.num_cameras:
+            raise ValueError(
+                "Future latent policy_camera_order must have num_cameras entries, got "
+                f"{self.policy_camera_order} for num_cameras={self.num_cameras}"
             )
 
 
