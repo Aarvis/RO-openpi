@@ -27,8 +27,8 @@ hf upload huggingaccounttest/lehome_all_garment_data \
 
 
 
-hf upload huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch5 \
-  "/ephemeral/sim_future_latent_ft_from_base_v1_epoch5" \
+hf upload huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch11_new \
+  "/ephemeral2/checkpoints/pi05_lehome_camera_cv_robot_finetune_future_latent/resume_from_epoch10/15000" \
   . \
   --repo-type model
 
@@ -105,15 +105,15 @@ robot_future_latents_dependency_multi_cotrain_base3
 
 
 
-hf upload huggingaccounttest/robot_ft_only_with_state_all_garment_2_epoch \
-  "/workspace/LEHOME/lehome-openpi/checkpoints/pi05_lehome_camera_cv_robot_finetune/robot_only_ft_with_state_all_garments/1350" \
+hf upload huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch11\
+  "/ephemeral/checkpoints/pi05_lehome_camera_cv_robot_finetune_future_latent/resume_from_epoch10/15000" \
   . \
   --repo-type model
 
 
 
-  hf upload huggingaccounttest/cotrain_base_future_latent_sim_only_trial_1500\
-  "/ephemeral2/cotrain_base_future_latent_sim_only_trial_1500" \
+  hf upload huggingaccounttest/\
+  "uv pip install -e /workspace/lehome-openpi/packages/openpi-client" \
   . \
   --repo-type model
 
@@ -344,11 +344,11 @@ hf download huggingaccounttest/cotrain_base_future_latent_sim_only_trial_1500 \
   --local-dir "/workspace/LEHOME/lehome-openpi/cotrain_base_future_latent_sim_only_trial_1500"
 
 
-hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
+hf download huggingaccounttest/sim_future_latent_finetune_furthur_from_13epoch \
   --repo-type model \
-  --local-dir "/workspace/LEHOME/lehome-openpi/robot_future_latents_dependency_multi_cotrain_base3"
+  --local-dir "/workspace/lehome-openpi/sim_future_latent_finetune_furthur_from_13epoch"
 
-hf download huggingaccounttest/sim_future_latents_dependency_multi_cotrain_base3 \
+hf download huggingaccounttest/sim_future_latent_finetune_furthur_from_13epoch \
   --repo-type model \
   --local-dir "/ephemeral2/sim_future_latents_dependency_multi_cotrain_base3"
 
@@ -364,7 +364,8 @@ uv run scripts/serve_policy.py \
   --policy.config pi05_lehome_camera_cv_robot_finetune_future_latent \
   --policy.dir /workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch10
 
-
+cd ..
+cd /workspace/lehome-openpi
 
 mkdir -p /workspace/cache/openpi
 export OPENPI_DATA_HOME=/workspace/cache/openpi
@@ -387,15 +388,15 @@ export MKL_NUM_THREADS=1
 
 uv run --no-sync scripts/multi_serve_policy.py \
   --num-servers 1 \
-  --start-port 8003 \
-  --gpu-id 3 \
+  --start-port 8000 \
+  --gpu-id 0 \
   --total-gpu-fraction 0.90 \
   --xla-preallocate \
-  --log-dir logs/multi_serve_policy_future_latent_gpu3 \
+  --log-dir logs/multi_serve_policy_future_latent_gpu1 \
   -- \
   policy:checkpoint \
   --policy.config pi05_lehome_camera_cv_robot_finetune_future_latent \
-  --policy.dir /workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch10
+  --policy.dir /workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch15_new
 
 
 hf download huggingaccounttest/sim_only_trained_future_latents_sim_round_config \
@@ -403,9 +404,9 @@ hf download huggingaccounttest/sim_only_trained_future_latents_sim_round_config 
   --local-dir "/workspace/lehome-openpi/sim_only_trained_future_latents_sim_round_config" 
 
 
-hf download huggingaccounttest/robot_future_latents_dependency_multi_cotrain_base3 \
+hf download huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch13_new\
   --repo-type model \
-  --local-dir "/scratch2/sim_future_latent_dependency_weights_data"
+  --local-dir "/workspace/lehome-openpi/sim_future_latent_ft_from_base_v1_epoch13_new"
 
 
   

@@ -42,23 +42,25 @@ hf auth login
 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
 
 
-hf download huggingaccounttest/pretrain_base_all_garment_4_epoch\
-  --local-dir /ephemeral/pretrain_base_all_garment_4_epoch \
-  --repo-type model
+mkdir -p "${HF_LEROBOT_HOME}/local/lehome_all_garment_data" && \
+hf download huggingaccounttest/lehome_all_garment_data \
+  --repo-type dataset \
+  --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data"
+
 
 hf download huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch10 \
   --repo-type model \
   --local-dir "/ephemeral/sim_future_latent_ft_from_base_v1_epoch10"
 
 hf download huggingaccounttest/sim_only_trained_future_latents_sim_round_config \
-  --repo-type model \
-  --local-dir "/ephemeral/sim_only_trained_future_latents_sim_round_config"
+  --repo-type dataset \
+  --local-dir "/ephemeral/lehome-openpi/sim_only_trained_future_latents_sim_round_config"
 
 
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.96 uv run scripts/train.py \
-  pi05_lehome_precomputed_16d_pretrain\
-  --exp-name lehome_pretrain_with_state_all_garments\
+  pi05_lehome_camera_cv_robot_finetune_future_latent\
+  --exp-name sim_future_latent_finetune_furthur_from_10epoch\
   --overwrite \
   --fsdp-devices 1
 

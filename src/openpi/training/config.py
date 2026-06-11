@@ -1552,6 +1552,7 @@ _CONFIGS = [
                 sidecar_root="/scratch/vla_future_latent_sidecar/output",
                 resampler_checkpoint_path="/scratch/future_latent_runs/resampler_autoencoder_v1/resampler_encoder_latest.pt",
                 future_predictor_checkpoint_path="/scratch/future_latent_runs/future_predictor_v1/future_predictor_latest.pt",
+                policy_camera_order=("top", "left_wrist", "right_wrist"),
                 freeze_image_encoder=True,
                 freeze_resampler=True,
                 freeze_future_predictor=True,
