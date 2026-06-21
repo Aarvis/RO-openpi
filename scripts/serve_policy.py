@@ -1,6 +1,7 @@
 import dataclasses
 import enum
 import logging
+import os
 import socket
 
 import tyro
@@ -111,11 +112,14 @@ def create_policy(args: Args) -> _policy.Policy:
         case Checkpoint():
             train_config = _config.get_config(args.policy.config)
             checkpoint_dir = args.policy.dir
+            if checkpoint_dir is None:
+                checkpoint_dir = os.environ.get("OPENPI_CHECKPOINT_DIR")
             if checkpoint_dir is None and train_config.ppo_policy is not None:
                 checkpoint_dir = train_config.ppo_policy.base_checkpoint_path
             if checkpoint_dir is None:
                 raise ValueError(
-                    "--policy.dir is required unless the config's ppo_policy.base_checkpoint_path is set."
+                    "--policy.dir is required unless OPENPI_CHECKPOINT_DIR or "
+                    "the config's ppo_policy.base_checkpoint_path is set."
                 )
             return _policy_config.create_trained_policy(
                 train_config,

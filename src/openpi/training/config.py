@@ -697,7 +697,7 @@ class LeRobotLehomeCameraCVMultiCoTrainDataConfig(DataConfigFactory):
     fallback_tol_factor: float = 1.1
     pos_weight: float = 1.0
     rot_weight: float = 1.0
-    max_iters: int = 10
+    max_iters: int = 20
     tol_pos_m: float = 1e-4
     tol_rot_deg: float = 0.2
     max_step_norm: float = 2.0
@@ -1695,6 +1695,152 @@ _CONFIGS = [
             delta_coef=0.001,
             # Fill these in when serving without CLI path overrides.
             base_checkpoint_path=None,
+            actor_head_path=None,
+            value_head_path=None,
+        ),
+        num_train_steps=1,
+        batch_size=1,
+        log_interval=1,
+        keep_period=None,
+        max_to_keep=1,
+    ),
+    TrainConfig(
+        # Inference-only rollout config: load the multi-cotrain future-latent VLA
+        # checkpoint as a frozen base policy and add PPO correction/value heads.
+        #
+        # This is intentionally not a training config for the VLA. The only trainable
+        # modules in the rollout stack are the optional PyTorch PPO heads, which are
+        # loaded separately by the policy server.
+        name="pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent_with_ppo_heads",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=True,
+            future_latent=pi0_config.FutureLatentConfig(
+                enabled=True,
+                num_cameras=3,
+                latent_tokens=24,
+                latent_dim=512,
+                adapter_hidden_dim=1024,
+                output_dim=2048,
+                predicted_latent_prob=0.60,
+                true_latent_prob=0.30,
+                dropped_latent_prob=0.10,
+                sidecar_root="/ephemeral2/robot_future_latents_depedency_cotrain_final/vla_future_latent_sidecar_offset10_v2",
+                resampler_checkpoint_path="/ephemeral2/robot_future_latents_depedency_cotrain_final/resampler_autoencoder_sim_real_run_v1/resampler_encoder_latest.pt",
+                future_predictor_checkpoint_path="/ephemeral2/robot_future_latents_depedency_cotrain_final/robot_future_predictor_v2/future_predictor_latest.pt",
+                policy_camera_order=("top", "left_wrist", "right_wrist"),
+                freeze_image_encoder=True,
+                freeze_resampler=True,
+                freeze_future_predictor=True,
+            ),
+        ),
+        num_workers=32,
+        run_val=False,
+        checkpoint_strategy="manual",
+        data=LeRobotLehomeCameraCVMultiCoTrainDataConfig(
+            repo_id="local/lehome_camera_cv_multi_cotrain",
+            base_config=DataConfig(prompt_from_task=False),
+            dataset_specs=(
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_pretrain_all_garment_round2_data",
+                    sample_weight=1.6,
+                    include_in_future_latent_dataset=False,
+                    apply_camera_cv_transform=False,
+                    fk_json_path=str(lehome_camera_cv_policy._DEFAULT_FK_JSON_PATH),
+                    camera_config_json_path=str(lehome_camera_cv_policy._DEFAULT_CAMERA_CFG_JSON_PATH),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb",
+                    masked_state_indices_csv="7,15",
+                    masked_action_indices_csv="2,3,4,5,6,7,10,11,12,13,14,15",
+                    target_image_height=480,
+                    target_image_width=640,
+                ),
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_robot_sim_all_garment_round2_data",
+                    sample_weight=0.15,
+                    include_in_future_latent_dataset=True,
+                    apply_camera_cv_transform=True,
+                    fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_so101_fk_from_usd_common.json"),
+                    camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "sim_top_camera_config_runtime_cv.json"),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
+                    masked_state_indices_csv="",
+                    masked_action_indices_csv="",
+                    target_image_height=480,
+                    target_image_width=640,
+                ),
+                LehomeCameraCVDatasetSpec(
+                    repo_id="local/lehome_robot_real_all_garment_round2_data",
+                    sample_weight=1.0,
+                    include_in_future_latent_dataset=True,
+                    apply_camera_cv_transform=True,
+                    fk_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_so101_fk_from_usd_common.json"),
+                    camera_config_json_path=str(lehome_camera_cv_policy._POLICY_DATA_DIR / "real_top_camera_config_runtime_cv.json"),
+                    dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+                    valid_image_names_csv="base_0_rgb,left_wrist_0_rgb,right_wrist_0_rgb",
+                    masked_state_indices_csv="",
+                    masked_action_indices_csv="",
+                    target_image_height=480,
+                    target_image_width=640,
+                ),
+            ),
+            inference_fk_json_path=str(
+                pathlib.Path(__file__).resolve().parents[1]
+                / "policies"
+                / "lehome_camera_cv"
+                / "real_so101_fk_from_usd_common.json"
+            ),
+            inference_camera_config_json_path=str(
+                pathlib.Path(__file__).resolve().parents[1]
+                / "policies"
+                / "lehome_camera_cv"
+                / "real_top_camera_config_runtime_cv.json"
+            ),
+            inference_dataset_joint_order_csv="shoulder_pan,shoulder_lift,elbow_flex,wrist_flex,wrist_roll,gripper",
+            inference_mode="real",
+            forced_prompt="fold the garment on the table",
+            inference_target_image_height=480,
+            inference_target_image_width=640,
+            action_dim=16,
+            output_action_dim=12,
+            state_unit="rad",
+            pose_quat_order="wxyz",
+            future_latent_sidecar_root="/ephemeral2/robot_future_latents_depedency_cotrain_final/vla_future_latent_sidecar_offset10_v2",
+            future_latent_filter_included_datasets=True,
+            future_latent_sidecar_required=False,
+            use_sample_weights=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/ephemeral2/pretrain_multidata_cotrain_base_with_state_hum_sim_rob_3_epoch/params",
+            missing_regex=".*(lora|future_latent_adapter).*",
+        ),
+        freeze_filter=nnx_utils.PathRegex("PaliGemma/img/.*"),
+        non_adapter_lr_multiplier=0.1,
+        adapter_param_regex=".*future_latent_adapter.*",
+        policy_metadata={
+            "policy_family": "pi05_lehome_multi_cotrain_future_latent_frozen_vla_ppo_heads",
+            "base_config": "pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent",
+            "inference_only": True,
+        },
+        ppo_policy=LehomePPOPolicyConfig(
+            action_horizon=10,
+            action_dim=12,
+            latent_dim=1024,
+            state_dim=12,
+            token_dim=256,
+            num_layers=4,
+            num_heads=8,
+            correction_scale=0.02,
+            delta_clip=2.0,
+            log_std_init=-0.5,
+            value_coef=1.0,
+            entropy_coef=0.002,
+            delta_coef=0.05,
+            # Supply --policy.dir or OPENPI_CHECKPOINT_DIR when serving.
+            base_checkpoint_path=None,
+            # Leave these unset for rollout one to collect with freshly initialized
+            # PPO heads. Set them for later rollouts when continuing from trained heads.
             actor_head_path=None,
             value_head_path=None,
         ),

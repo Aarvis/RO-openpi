@@ -312,6 +312,27 @@ unset CUDA_VISIBLE_DEVICES
 export VK_ICD_FILENAMES=/etc/vulkan/icd.d/nvidia_icd.json
 --allow_duplicate_garments
 
+
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://38.65.239.41:36925,ws://38.65.239.41:15223,ws://38.65.239.41:37449,ws://38.65.239.41:26268   --step_hz 30   --sim_device cpu   --device cpu   --time-analytics
+
+
+xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && \
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --garment_type custom \
+  --num_episodes 20 \
+  --max_workers 8 \
+  --gpu_ids 0,1,2,3,4,5,6,7 \
+  --ramp_up_episode_gate 1 \
+  --worker_timeout_sec 86400 \
+  --policy_type openpi_ws \
+  --policy_paths ws://38.65.239.41:36925,ws://38.65.239.41:15223,ws://38.65.239.41:37449,ws://38.65.239.41:26268 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu \
+  --time-analytics
+
 python -m scripts.eval \
     --policy_type docker \
     --docker_url http://174.88.252.119:15019 \
@@ -661,7 +682,7 @@ python -m parallel_eval   --headless   --enable_cameras   --garment_type custom 
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://74.15.135.156:40711,ws://74.15.135.156:40797,ws://74.15.135.156:40703,ws://74.15.135.156:40778 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 
-xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20   --max_workers 8  --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://38.117.87.46:43293,ws://38.117.87.46:40359,ws://38.117.87.46:46035,ws://38.117.87.46:44827 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
+xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 50   --max_workers 8  --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://38.65.239.41:36925,ws://38.65.239.41:15223,ws://38.65.239.41:37449,ws://38.65.239.41:26268 --step_hz 30  --sim_device cpu   --device cpu --time-analytics
 
 
 

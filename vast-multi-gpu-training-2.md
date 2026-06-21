@@ -48,14 +48,37 @@ hf download huggingaccounttest/lehome_all_garment_data \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data"
 
 
-hf download huggingaccounttest/sim_future_latent_ft_from_base_v1_epoch10 \
+hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_4_epoch \
   --repo-type model \
-  --local-dir "/ephemeral/sim_future_latent_ft_from_base_v1_epoch10"
+  --local-dir "/dev/shm/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_4_epoch"
+
+
 
 hf download huggingaccounttest/sim_only_trained_future_latents_sim_round_config \
   --repo-type dataset \
   --local-dir "/ephemeral/lehome-openpi/sim_only_trained_future_latents_sim_round_config"
 
+
+
+
+export DISPLAY=:99
+
+xdpyinfo >/dev/null && echo "DISPLAY OK" && \
+python -m parallel_eval \
+  --headless \
+  --enable_cameras \
+  --garment_type custom \
+  --num_episodes 20 \
+  --max_workers 8 \
+  --gpu_ids 0,1,2,3,4,5,6,7 \
+  --ramp_up_episode_gate 1 \
+  --worker_timeout_sec 86400 \
+  --policy_type openpi_ws \
+  --policy_paths ws://38.65.239.41:36925,ws://38.65.239.41:15223,ws://38.65.239.41:37449,ws://38.65.239.41:26268 \
+  --step_hz 30 \
+  --sim_device cpu \
+  --device cpu \
+  --time-analytics
 
 
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.96 uv run scripts/train.py \
