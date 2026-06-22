@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 from torch import nn
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -160,6 +164,9 @@ def load_actor_head(path: str | Path | None, config: PPOHeadConfig, *, device: t
     if ckpt_path is not None:
         payload = torch.load(ckpt_path, map_location=device)
         actor.load_state_dict(_extract_state_dict(payload, ("actor", "actor_head", "state_dict", "model_state_dict")))
+        logger.info("Loaded LeHome PPO actor head from %s on %s", ckpt_path, device)
+    else:
+        logger.info("Initialized LeHome PPO actor head from scratch on %s", device)
     actor.eval()
     return actor
 
@@ -170,6 +177,9 @@ def load_value_head(path: str | Path | None, config: PPOHeadConfig, *, device: t
     if ckpt_path is not None:
         payload = torch.load(ckpt_path, map_location=device)
         value.load_state_dict(_extract_state_dict(payload, ("value", "value_head", "state_dict", "model_state_dict")))
+        logger.info("Loaded LeHome PPO value head from %s on %s", ckpt_path, device)
+    else:
+        logger.info("Initialized LeHome PPO value head from scratch on %s", device)
     value.eval()
     return value
 

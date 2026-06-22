@@ -23,6 +23,8 @@ hf upload huggingaccounttest/lehome_all_garment_data \
   --repo-type dataset
 
 
+huggingaccounttest/cotrain_base_future_latent_ah10_robot_only_polish8
+
  
 
 
@@ -388,15 +390,15 @@ export MKL_NUM_THREADS=1
 
 uv run --no-sync scripts/multi_serve_policy.py \
   --num-servers 1 \
-  --start-port 8002 \
-  --gpu-id 2 \
+  --start-port 8000 \
+  --gpu-id 0 \
   --total-gpu-fraction 0.90 \
   --xla-preallocate \
   --log-dir logs/multi_serve_policy_future_latent_gpu0 \
   -- \
   policy:checkpoint \
-  --policy.config pi05_lehome_camera_cv_robot_finetune \
-  --policy.dir /dev/shm/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_4_epoch
+  --policy.config pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent_with_ppo_heads \
+  --policy.dir /workspace/lehome-openpi/cotrain_base_future_latent_ah10_robot_only_polish8
 
 uv run --no-sync scripts/multi_serve_policy.py \
   --num-servers 1 \
@@ -431,11 +433,10 @@ hf download huggingaccounttest/robot_ft_only_with_state_all_garment_4_epoch \
   --repo-type model \
   --local-dir "/dev/shm/robot_ft_only_with_state_all_garment_4_epoch" 
 
-hf download huggingaccounttest/robot_future_latents_depedency_cotrain_final \
+hf download huggingaccounttest/robot_future_latents_depedency_cotrain_final\
   --repo-type model \
-  --local-dir "/dev/shm/robot_future_latents_depedency_cotrain_final" \
-  --include "
-resampler_autoencoder_sim_real_run_v1/**"
+  --local-dir "/workspace/lehome-openpi/robot_future_latents_depedency_cotrain_final" \
+  --include "resampler_autoencoder_sim_real_run_v1/**"
 
   --include "robot_future_predictor_v2/**"
 
