@@ -129,13 +129,22 @@ class ModelTransformFactory(GroupFactory):
     # If provided, will determine the default prompt that be used by the model.
     default_prompt: str | None = None
 
+    @staticmethod
+    def _uses_image_prefix(model_config: _model.BaseModelConfig) -> bool:
+        if isinstance(model_config, pi0_config.Pi0Config):
+            return not (model_config.robot_spline.enabled and not model_config.robot_spline.use_image_prefix)
+        return True
+
     def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        resize_transforms = (
+            [_transforms.ResizeImages(224, 224)] if self._uses_image_prefix(model_config) else []
+        )
         match model_config.model_type:
             case _model.ModelType.PI0:
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
-                        _transforms.ResizeImages(224, 224),
+                        *resize_transforms,
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                         ),
@@ -147,7 +156,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
-                        _transforms.ResizeImages(224, 224),
+                        *resize_transforms,
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                             discrete_state_input=model_config.discrete_state_input,
@@ -167,7 +176,7 @@ class ModelTransformFactory(GroupFactory):
                 return _transforms.Group(
                     inputs=[
                         _transforms.InjectDefaultPrompt(self.default_prompt),
-                        _transforms.ResizeImages(224, 224),
+                        *resize_transforms,
                         _transforms.TokenizeFASTInputs(
                             tokenizer_cls(model_config.max_token_len, **tokenizer_kwargs),
                         ),
@@ -1757,16 +1766,16 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2000,
-            peak_lr=5e-5,
+            peak_lr=2e-4,
             decay_steps=50000,
-            decay_lr=5e-6,
+            decay_lr=2e-6,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
             missing_regex=".*(lora|robot_spline_adapter).*",
         ),
         freeze_filter=nnx_utils.PathRegex("PaliGemma/img/.*"),
-        non_adapter_lr_multiplier=0.1,
+        non_adapter_lr_multiplier=0.5,
         adapter_param_regex=".*robot_spline_adapter.*",
         num_train_steps=50000,
         batch_size=128,

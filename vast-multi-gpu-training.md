@@ -228,16 +228,16 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 
-mkdir -p /ephemeral2/cache/openpi
-export OPENPI_DATA_HOME=/ephemeral2/cache/openpi
-export HF_HOME=/ephemeral2/.hf_home
-export HUGGINGFACE_HUB_CACHE=/ephemeral2/.hf_home/hub
-export HF_LEROBOT_HOME=/ephemeral2/.hf_home/lerobot
+mkdir -p /ephemeral/cache/openpi
+export OPENPI_DATA_HOME=/ephemeral/cache/openpi
+export HF_HOME=/ephemeral/.hf_home
+export HUGGINGFACE_HUB_CACHE=/ephemeral/.hf_home/hub
+export HF_LEROBOT_HOME=/ephemeral/.hf_home/lerobot
 unset TRANSFORMERS_CACHE   # removes the deprecation warning path usage
 
-mkdir -p /ephemeral2/tmp
-export HF_DATASETS_CACHE=/ephemeral2/.hf_home/datasets
-export TMPDIR=/ephemeral2/tmp
+mkdir -p /ephemeral/tmp
+export HF_DATASETS_CACHE=/ephemeral/.hf_home/datasets
+export TMPDIR=/ephemeral/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
