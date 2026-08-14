@@ -31,3 +31,11 @@ def test_model_transform_factory_keeps_resize_images_for_standard_pi05():
     transforms = training_config.ModelTransformFactory()(model_config)
 
     assert any(isinstance(transform, _transforms.ResizeImages) for transform in transforms.inputs)
+
+
+def test_robot_spline_joint_delta_finetune_uses_base_pi05_action_dim():
+    cfg = training_config.get_config("pi05_lehome_robot_spline_joint_delta_finetune")
+
+    assert isinstance(cfg.model, pi0_config.Pi0Config)
+    assert cfg.model.action_dim == 32
+    assert cfg.data.action_dim == 12

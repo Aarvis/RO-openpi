@@ -1726,7 +1726,10 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(
             pi05=True,
             action_horizon=10,
-            action_dim=12,
+            # Keep the base pi0.5 action width so checkpoint restore stays shape-compatible.
+            # LeHome's real 12D actions are handled by the data/output transforms and padded
+            # to the model width via PadStatesAndActions.
+            action_dim=32,
             discrete_state_input=True,
             robot_spline=pi0_config.RobotSplineConfig(
                 enabled=True,
