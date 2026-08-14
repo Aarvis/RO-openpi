@@ -10,6 +10,7 @@ from typing_extensions import override
 
 from openpi.models import model as _model
 from openpi.models import pi0_config
+import openpi.models.robot_spline_adapter as _robot_spline_adapter
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
@@ -86,6 +87,10 @@ class Pi0(_model.BaseModel):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
         self.future_latent_config = config.future_latent
+        self.robot_spline_config = config.robot_spline
+        self.image_keys = (
+            _model.IMAGE_KEYS if not (config.robot_spline.enabled and not config.robot_spline.use_image_prefix) else ()
+        )
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -106,7 +111,7 @@ class Pi0(_model.BaseModel):
                 dtype_mm=config.dtype,
             )
         )
-        img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+        img.lazy_init(jnp.zeros((1, *_model.IMAGE_RESOLUTION, 3), dtype=jnp.float32), train=False, rngs=rngs)
         self.PaliGemma = nnx.Dict(llm=llm, img=img)
         self.action_in_proj = nnx.Linear(config.action_dim, action_expert_config.width, rngs=rngs)
         if config.future_latent.enabled:
@@ -114,6 +119,31 @@ class Pi0(_model.BaseModel):
                 latent_dim=config.future_latent.latent_dim,
                 hidden_dim=config.future_latent.adapter_hidden_dim,
                 output_dim=paligemma_config.width,
+                rngs=rngs,
+            )
+        if config.robot_spline.enabled:
+            self.robot_spline_adapter = nnx_bridge.ToNNX(
+                _robot_spline_adapter.RobotSplinePrefixAdapter(
+                    control_point_dim=config.robot_spline.control_point_dim,
+                    control_count=config.robot_spline.control_count,
+                    degree=config.robot_spline.degree,
+                    model_dim=config.robot_spline.model_dim,
+                    output_dim=paligemma_config.width,
+                    num_layers=config.robot_spline.num_layers,
+                    num_heads=config.robot_spline.num_heads,
+                    ffn_dim=config.robot_spline.ffn_dim,
+                    width_fourier_bands=config.robot_spline.width_fourier_bands,
+                    width_hidden_dim=config.robot_spline.width_hidden_dim,
+                    rope_base=config.robot_spline.rope_base,
+                )
+            )
+            self.robot_spline_adapter.lazy_init(
+                jnp.zeros(
+                    (1, config.robot_spline.control_count, config.robot_spline.control_point_dim),
+                    dtype=jnp.float32,
+                ),
+                jnp.zeros((1, config.robot_spline.knot_count), dtype=jnp.float32),
+                train=False,
                 rngs=rngs,
             )
         if config.pi05:
@@ -161,7 +191,7 @@ class Pi0(_model.BaseModel):
 
     def encode_future_latent_image_embeddings(self, obs: _model.Observation) -> dict[str, at.Array]:
         """Return current image encoder tokens used by the PyTorch future-latent stack at inference."""
-        obs = _model.preprocess_observation(None, obs, train=False)
+        obs = _model.preprocess_observation(None, obs, train=False, image_keys=tuple(obs.images.keys()))
         embeddings = {}
         for name in obs.images:
             image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
@@ -176,7 +206,7 @@ class Pi0(_model.BaseModel):
         ar_mask = []
         tokens = []
         # embed images
-        for name in obs.images:
+        for name in self.image_keys:
             image_tokens, _ = self.PaliGemma.img(obs.images[name], train=False)
 
             tokens.append(image_tokens)
@@ -190,6 +220,28 @@ class Pi0(_model.BaseModel):
             # image tokens attend to each other
             ar_mask += [False] * image_tokens.shape[1]
 
+        # add language (aka tokenized inputs)
+        if obs.tokenized_prompt is not None:
+            tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
+            tokens.append(tokenized_inputs)
+            input_mask.append(obs.tokenized_prompt_mask)
+            # full attention between image and language inputs
+            ar_mask += [False] * tokenized_inputs.shape[1]
+
+        if self.robot_spline_config.enabled:
+            if obs.robot_spline_coefficients is None or obs.robot_spline_knots is None:
+                raise ValueError("robot_spline_coefficients and robot_spline_knots are required when robot_spline is enabled.")
+            spline_tokens = self.robot_spline_adapter(
+                jnp.asarray(obs.robot_spline_coefficients),
+                jnp.asarray(obs.robot_spline_knots),
+                train=train,
+            )
+            if tokens:
+                spline_tokens = spline_tokens.astype(tokens[0].dtype)
+            tokens.append(spline_tokens)
+            input_mask.append(jnp.ones(spline_tokens.shape[:2], dtype=jnp.bool_))
+            ar_mask += [False] * spline_tokens.shape[1]
+
         future_latents = self._select_future_latents(obs, rng=rng, train=train)
         if future_latents is not None:
             future_values, future_valid = future_latents
@@ -200,13 +252,8 @@ class Pi0(_model.BaseModel):
             input_mask.append(future_mask)
             ar_mask += [False] * future_tokens.shape[1]
 
-        # add language (aka tokenized inputs)
-        if obs.tokenized_prompt is not None:
-            tokenized_inputs = self.PaliGemma.llm(obs.tokenized_prompt, method="embed")
-            tokens.append(tokenized_inputs)
-            input_mask.append(obs.tokenized_prompt_mask)
-            # full attention between image and language inputs
-            ar_mask += [False] * tokenized_inputs.shape[1]
+        if not tokens:
+            raise ValueError("Prefix construction produced no tokens. Provide at least language/state tokens or another prefix modality.")
         tokens = jnp.concatenate(tokens, axis=1)
         input_mask = jnp.concatenate(input_mask, axis=1)
         ar_mask = jnp.array(ar_mask)
@@ -266,7 +313,12 @@ class Pi0(_model.BaseModel):
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
     ) -> at.Float[at.Array, "*b ah"]:
         preprocess_rng, future_rng, noise_rng, time_rng = jax.random.split(rng, 4)
-        observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
+        observation = _model.preprocess_observation(
+            preprocess_rng,
+            observation,
+            train=train,
+            image_keys=self.image_keys,
+        )
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
@@ -345,7 +397,7 @@ class Pi0(_model.BaseModel):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> _model.Actions:
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = _model.preprocess_observation(None, observation, train=False, image_keys=self.image_keys)
         # note that we use the convention more common in diffusion literature, where t=1 is noise and t=0 is the target
         # distribution. yes, this is the opposite of the pi0 paper, and I'm sorry.
         dt = -1.0 / num_steps
@@ -386,7 +438,7 @@ class Pi0(_model.BaseModel):
         num_steps: int | at.Int[at.Array, ""] = 10,
         noise: at.Float[at.Array, "b ah ad"] | None = None,
     ) -> dict[str, at.Array]:
-        observation = _model.preprocess_observation(None, observation, train=False)
+        observation = _model.preprocess_observation(None, observation, train=False, image_keys=self.image_keys)
         dt = -1.0 / num_steps
         batch_size = observation.state.shape[0]
         if noise is None:

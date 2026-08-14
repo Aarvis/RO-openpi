@@ -47,6 +47,7 @@ def create_torch_dataloader(
     dataset = _data_loader.TransformedDataset(
         dataset,
         [
+            *_data_loader._make_sidecar_transforms(data_config),
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
             # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
@@ -79,6 +80,7 @@ def create_rlds_dataloader(
     dataset = _data_loader.IterableTransformedDataset(
         dataset,
         [
+            *_data_loader._make_sidecar_transforms(data_config),
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
             # Remove strings since they are not supported by JAX and are not needed to compute norm stats.
@@ -142,7 +144,7 @@ def main(
                 stats[key].update(np.asarray(batch[key]), mask=mask, weights=weights)
 
         norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
-        output_path = config.assets_dirs / data_config.repo_id
+        output_path = config.assets_dirs / (data_config.asset_id or data_config.repo_id)
         print(f"Writing stats to: {output_path}")
         normalize.save(output_path, norm_stats)
         return
@@ -169,7 +171,7 @@ def main(
 
     norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
 
-    output_path = config.assets_dirs / data_config.repo_id
+    output_path = config.assets_dirs / (data_config.asset_id or data_config.repo_id)
     print(f"Writing stats to: {output_path}")
     normalize.save(output_path, norm_stats)
 

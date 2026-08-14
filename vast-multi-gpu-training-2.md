@@ -19,6 +19,8 @@ GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
 pip install huggingface_hub
 
 
+
+
 mkdir -p /ephemeral/cache/openpi
 export OPENPI_DATA_HOME=/ephemeral/cache/openpi
 export HF_HOME=/ephemeral/.hf_home
@@ -48,9 +50,9 @@ hf download huggingaccounttest/lehome_all_garment_data \
   --local-dir "${HF_LEROBOT_HOME}/local/lehome_all_garment_data"
 
 
-hf download huggingaccounttest/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_4_epoch \
+hf download huggingaccounttest/cotrain_base_future_latent_ah10_robot_only_polish8 \
   --repo-type model \
-  --local-dir "/dev/shm/pretrain_base_4_epoch_robot_ft_both_with_state_all_garment_4_epoch"
+  --local-dir "/workspace/lehome-openpi/cotrain_base_future_latent_ah10_robot_only_polish8"
 
 
 

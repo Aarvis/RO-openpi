@@ -21,6 +21,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.lehome_camera_cv_policy as lehome_camera_cv_policy
 import openpi.policies.lehome_policy as lehome_policy
+import openpi.policies.lehome_robot_spline_policy as lehome_robot_spline_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
@@ -101,6 +102,9 @@ class DataConfig:
     multi_pose_quat_order: str = "wxyz"
     multi_action_dim: int = 16
     multi_use_sample_weights: bool = False
+    robot_spline_sidecar_root: str | None = None
+    robot_spline_expand_pairings: bool = False
+    robot_spline_sidecar_required: bool = True
     future_latent_sidecar_root: str | None = None
     future_latent_filter_included_datasets: bool = False
     future_latent_sidecar_required: bool = True
@@ -435,6 +439,57 @@ class LeRobotLehomeDataConfig(DataConfigFactory):
             )
 
         model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotLehomeRobotSplineDataConfig(DataConfigFactory):
+    """LeHome joint-state config conditioned on predicted robot spline sidecars and no image tokens."""
+
+    use_delta_joint_actions: bool = True
+    action_dim: int = 12
+    forced_prompt: str | None = None
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_transform = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "observation/state": "observation.state",
+                        "actions": "actions",
+                        "prompt": "prompt",
+                        "robot_spline_coefficients": "robot_spline/coefficients",
+                        "robot_spline_knots": "robot_spline/knots",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[lehome_robot_spline_policy.LehomeRobotSplineInputs(model_type=model_config.model_type)],
+            outputs=[lehome_robot_spline_policy.LehomeRobotSplineOutputs(action_dim=self.action_dim)],
+        )
+
+        if self.use_delta_joint_actions:
+            delta_action_mask = _transforms.make_bool_mask(5, -1, 5, -1)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+        if self.forced_prompt is not None:
+            model_transforms = _transforms.Group(
+                inputs=[_transforms.SetPrompt(self.forced_prompt), *model_transforms.inputs],
+                outputs=model_transforms.outputs,
+            )
 
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
@@ -1018,6 +1073,8 @@ class TrainConfig:
     run_val: bool = False
     # Validation dataset repo id. Uses the same transforms and normalization assets as training.
     val_repo_id: str | None = None
+    # Optional validation predicted-robot-spline sidecar root. If unset, the training sidecar root is reused.
+    val_robot_spline_sidecar_root: str | None = None
     # How often (in steps) to run validation.
     val_frequency: int = 1000
     # Global validation batch size. If not provided, defaults to the training batch size.
@@ -1653,6 +1710,68 @@ _CONFIGS = [
         save_steps=(900,),
         keep_period=None,
         max_to_keep=4,
+    ),
+    TrainConfig(
+        # Spline-conditioned pi0.5 fine-tune: current joint state + predicted robot spline, no image prefix.
+        name="pi05_lehome_robot_spline_joint_delta_finetune",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            action_dim=12,
+            discrete_state_input=True,
+            robot_spline=pi0_config.RobotSplineConfig(
+                enabled=True,
+                use_image_prefix=False,
+                control_count=13,
+                degree=3,
+                control_point_dim=2048,
+                model_dim=512,
+                num_layers=2,
+                num_heads=8,
+                ffn_dim=2048,
+                width_fourier_bands=8,
+                width_hidden_dim=512,
+                rope_base=10000.0,
+            ),
+        ),
+        num_workers=16,
+        run_val=False,
+        checkpoint_strategy="manual",
+        data=LeRobotLehomeRobotSplineDataConfig(
+            repo_id="E:/Lehome-Dataset/lehome_round_2_dataset/sim_dataset/robot_sim_ft_lehome_all_garment_data_z180",
+            assets=AssetsConfig(asset_id="pi05_lehome_robot_spline_joint_delta_finetune"),
+            base_config=DataConfig(
+                prompt_from_task=True,
+                robot_spline_sidecar_root=(
+                    "E:/Lehome-Dataset/lehome_round_2_dataset/sim_dataset/"
+                    "robot_sim_ft_lehome_all_garment_data_z180/embeddings/"
+                    "robot_sim_multiview_vae_joint_full_visual_epoch/"
+                    "predicted_robot_local_splines_default_run_n010"
+                ),
+                robot_spline_expand_pairings=True,
+                robot_spline_sidecar_required=True,
+            ),
+            use_delta_joint_actions=True,
+            action_dim=12,
+            forced_prompt="fold the garment on the table",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2000,
+            peak_lr=5e-5,
+            decay_steps=50000,
+            decay_lr=5e-6,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*(lora|robot_spline_adapter).*",
+        ),
+        freeze_filter=nnx_utils.PathRegex("PaliGemma/img/.*"),
+        non_adapter_lr_multiplier=0.1,
+        adapter_param_regex=".*robot_spline_adapter.*",
+        num_train_steps=50000,
+        batch_size=128,
+        log_interval=100,
+        save_interval=5000,
     ),
     TrainConfig(
         # Inference-only rollout config: load a trained pi0.5 LeHome camera-CV

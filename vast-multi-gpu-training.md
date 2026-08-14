@@ -85,6 +85,11 @@ hf download huggingaccounttest/cotrain_base_ah10_robot_only_polish3\
   --repo-type model
 
 
+hf download huggingaccounttest/lehome_robot_real_all_garment_round2_data --local-dir D:\Lehome-Dataset\real-robot-hf --repo-type dataset
+
+
+
+
 hf upload huggingaccounttest/docker-image-sim-lehome-policy-r55-cotrainbase-polish1-3-5090\
   "/home/ubuntu/sim-lehome-policy-r55-cotrainbase-polish1-3-5090" \
   . \
@@ -390,8 +395,20 @@ export MKL_NUM_THREADS=1
 
 uv run --no-sync scripts/multi_serve_policy.py \
   --num-servers 1 \
-  --start-port 8000 \
-  --gpu-id 0 \
+  --start-port 8003 \
+  --gpu-id 3 \
+  --total-gpu-fraction 0.90 \
+  --xla-preallocate \
+  --log-dir logs/multi_serve_policy_future_latent_gpu0 \
+  -- \
+  policy:checkpoint \
+  --policy.config pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
+  --policy.dir /workspace/lehome-openpi/cotrain_base_future_latent_ah10_robot_only_polish8
+
+uv run --no-sync scripts/multi_serve_policy.py \
+  --num-servers 1 \
+  --start-port 8003 \
+  --gpu-id 3 \
   --total-gpu-fraction 0.90 \
   --xla-preallocate \
   --log-dir logs/multi_serve_policy_future_latent_gpu0 \

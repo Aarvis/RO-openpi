@@ -60,10 +60,9 @@ uv run examples/lehome/convert_all_episode_json_to_lerobot.py \
   --overwrite \
   --workers 1
 
-hf upload huggingaccounttest/lehome_train_episodes \
-  "/datadrive/hf_cache/lerobot/local/lehome_train_episodes" \
-  . \
-  --repo-type dataset && \
+hf upload aarvis/isaac_sim_lerobot_garment_folding_lehome2026 "D:\Lehome-Dataset\lehome_round_2_dataset\sim_dataset\robot_sim_ft_lehome_all_garment_data_z180" . --repo-type dataset 
+  
+  && \
 hf repos settings huggingaccounttest/lehome_train_episodes \
   --repo-type dataset \
   --gated manual
@@ -343,7 +342,7 @@ python -m scripts.eval \
     --enable_cameras
 
 
-uv pip install -e /workspace/LEHOME/lehome-openpi/packages/openpi-client
+uv pip install -e /workspace/lehome-openpi/packages/openpi-client
 
 uv pip install -e /home/ubuntu/LEHOME/lehome-openpi/packages/openpi-client
 
@@ -655,10 +654,12 @@ python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py \
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://57.128.84.121:8000,ws://57.128.84.121:8001,ws://57.128.84.121:8002,ws://57.128.84.121:8003 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
 
 
-python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 4   --gpu_ids 0,1,2,3 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://69.19.136.171:8000,ws://69.19.136.171:8001,ws://69.19.136.171:8002,ws://69.19.136.171:8003  --step_hz 30  --sim_device cpu  --device cpu --time-analytics 
+xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://106.185.159.136:21034,ws://106.185.159.136:21801,ws://106.185.159.136:21761,ws://106.185.159.136:21720  --step_hz 30  --sim_device cpu  --device cpu --time-analytics --use_random_seed --allow_duplicate_garments --record_for_ppo_rollout --no-record_keep_frame_images
 
---use_random_seed --allow_duplicate_garments 
 
+xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://106.185.159.136:21034,ws://106.185.159.136:21801,ws://106.185.159.136:21761,ws://106.185.159.136:21720  --step_hz 30  --sim_device cpu  --device cpu --time-analytics --allow_duplicate_garments --worker_seeds 42,137,829,2047,5603,9181,31415,65537
+
+--use_random_seed 
 
 --record_episodes --record_all_episodes --record_inbuilt_step_rewards --record_policy_latent 
 

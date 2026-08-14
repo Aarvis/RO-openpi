@@ -103,6 +103,10 @@ class Observation(Generic[ArrayT]):
     future_latent_true: at.Float[ArrayT, "*b c t d"] | None = None
     future_latent_valid_mask: at.Bool[ArrayT, "*b c"] | None = None
 
+    # Optional predicted robot spline sidecar used by spline-conditioned pi0.5 variants.
+    robot_spline_coefficients: at.Float[ArrayT, "*b n d"] | None = None
+    robot_spline_knots: at.Float[ArrayT, "*b k"] | None = None
+
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
     # Tokenized prompt mask.
@@ -121,20 +125,24 @@ class Observation(Generic[ArrayT]):
         # Ensure that tokenized_prompt and tokenized_prompt_mask are provided together.
         if ("tokenized_prompt" in data) != ("tokenized_prompt_mask" in data):
             raise ValueError("tokenized_prompt and tokenized_prompt_mask must be provided together.")
+        image_dict = data.get("image", {})
+        image_mask_dict = data.get("image_mask", {})
         # If images are uint8, convert them to [-1, 1] float32.
-        for key in data["image"]:
-            if data["image"][key].dtype == np.uint8:
-                data["image"][key] = data["image"][key].astype(np.float32) / 255.0 * 2.0 - 1.0
-            elif hasattr(data["image"][key], "dtype") and data["image"][key].dtype == torch.uint8:
-                data["image"][key] = data["image"][key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
+        for key in image_dict:
+            if image_dict[key].dtype == np.uint8:
+                image_dict[key] = image_dict[key].astype(np.float32) / 255.0 * 2.0 - 1.0
+            elif hasattr(image_dict[key], "dtype") and image_dict[key].dtype == torch.uint8:
+                image_dict[key] = image_dict[key].to(torch.float32).permute(0, 3, 1, 2) / 255.0 * 2.0 - 1.0
         return cls(
-            images=data["image"],
-            image_masks=data["image_mask"],
+            images=image_dict,
+            image_masks=image_mask_dict,
             state=data["state"],
             action_mask=data.get("action_mask"),
             future_latent_pred=data.get("future_latent_pred"),
             future_latent_true=data.get("future_latent_true"),
             future_latent_valid_mask=data.get("future_latent_valid_mask"),
+            robot_spline_coefficients=data.get("robot_spline_coefficients"),
+            robot_spline_knots=data.get("robot_spline_knots"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -218,6 +226,8 @@ def preprocess_observation(
         future_latent_pred=observation.future_latent_pred,
         future_latent_true=observation.future_latent_true,
         future_latent_valid_mask=observation.future_latent_valid_mask,
+        robot_spline_coefficients=observation.robot_spline_coefficients,
+        robot_spline_knots=observation.robot_spline_knots,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

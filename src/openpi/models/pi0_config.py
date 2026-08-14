@@ -50,6 +50,45 @@ class FutureLatentConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class RobotSplineConfig:
+    enabled: bool = False
+    use_image_prefix: bool = True
+    control_count: int = 13
+    degree: int = 3
+    control_point_dim: int = 2048
+    model_dim: int = 512
+    num_layers: int = 2
+    num_heads: int = 8
+    ffn_dim: int = 2048
+    width_fourier_bands: int = 8
+    width_hidden_dim: int = 512
+    rope_base: float = 10_000.0
+
+    @property
+    def knot_count(self) -> int:
+        return self.control_count + self.degree + 1
+
+    def __post_init__(self) -> None:
+        if self.control_count <= 0:
+            raise ValueError(f"control_count must be positive, got {self.control_count}")
+        if self.degree != 3:
+            raise ValueError(f"Only cubic robot spline conditioning is currently supported, got degree={self.degree}")
+        if self.model_dim % self.num_heads != 0:
+            raise ValueError(
+                f"robot spline model_dim ({self.model_dim}) must be divisible by num_heads ({self.num_heads})"
+            )
+        head_dim = self.model_dim // self.num_heads
+        if head_dim % 4 != 0:
+            raise ValueError(
+                f"robot spline per-head dimension ({head_dim}) must be divisible by 4 for 4D RoPE"
+            )
+        if (head_dim // 4) % 2 != 0:
+            raise ValueError(
+                f"robot spline per-geometry RoPE chunk ({head_dim // 4}) must be even"
+            )
+
+
+@dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
     paligemma_variant: _gemma.Variant = "gemma_2b"
@@ -66,6 +105,7 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
     future_latent: FutureLatentConfig = dataclasses.field(default_factory=FutureLatentConfig)
+    robot_spline: RobotSplineConfig = dataclasses.field(default_factory=RobotSplineConfig)
 
     def __post_init__(self):
         if self.max_token_len is None:
@@ -90,19 +130,28 @@ class Pi0Config(_model.BaseModelConfig):
     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
         image_spec = jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
         image_mask_spec = jax.ShapeDtypeStruct([batch_size], jnp.bool_)
+        include_images = not (self.robot_spline.enabled and not self.robot_spline.use_image_prefix)
 
         with at.disable_typechecking():
             observation_spec = _model.Observation(
-                images={
-                    "base_0_rgb": image_spec,
-                    "left_wrist_0_rgb": image_spec,
-                    "right_wrist_0_rgb": image_spec,
-                },
-                image_masks={
-                    "base_0_rgb": image_mask_spec,
-                    "left_wrist_0_rgb": image_mask_spec,
-                    "right_wrist_0_rgb": image_mask_spec,
-                },
+                images=(
+                    {
+                        "base_0_rgb": image_spec,
+                        "left_wrist_0_rgb": image_spec,
+                        "right_wrist_0_rgb": image_spec,
+                    }
+                    if include_images
+                    else {}
+                ),
+                image_masks=(
+                    {
+                        "base_0_rgb": image_mask_spec,
+                        "left_wrist_0_rgb": image_mask_spec,
+                        "right_wrist_0_rgb": image_mask_spec,
+                    }
+                    if include_images
+                    else {}
+                ),
                 state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
@@ -135,6 +184,19 @@ class Pi0Config(_model.BaseModelConfig):
                 future_latent_valid_mask=(
                     jax.ShapeDtypeStruct([batch_size, self.future_latent.num_cameras], jnp.bool_)
                     if self.future_latent.enabled
+                    else None
+                ),
+                robot_spline_coefficients=(
+                    jax.ShapeDtypeStruct(
+                        [batch_size, self.robot_spline.control_count, self.robot_spline.control_point_dim],
+                        jnp.float32,
+                    )
+                    if self.robot_spline.enabled
+                    else None
+                ),
+                robot_spline_knots=(
+                    jax.ShapeDtypeStruct([batch_size, self.robot_spline.knot_count], jnp.float32)
+                    if self.robot_spline.enabled
                     else None
                 ),
             )

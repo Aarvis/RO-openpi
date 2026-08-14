@@ -16,6 +16,7 @@ import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.training.future_latent_sidecar as _future_latent_sidecar
+import openpi.training.robot_spline_sidecar as _robot_spline_sidecar
 import openpi.transforms as _transforms
 
 T_co = TypeVar("T_co", covariant=True)
@@ -132,6 +133,28 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+def _make_sidecar_transforms(data_config: _config.DataConfig) -> list[_transforms.DataTransformFn]:
+    transforms: list[_transforms.DataTransformFn] = []
+    if data_config.robot_spline_sidecar_root is not None:
+        transforms.append(
+            _robot_spline_sidecar.RobotSplineSidecarTransform(
+                sidecar_root=data_config.robot_spline_sidecar_root,
+                required=data_config.robot_spline_sidecar_required,
+            )
+        )
+    if data_config.future_latent_sidecar_root is not None:
+        if data_config.repo_id is None:
+            raise ValueError("Repo ID is not set. Cannot load future latent sidecar.")
+        transforms.append(
+            _future_latent_sidecar.FutureLatentSidecarTransform(
+                sidecar_root=data_config.future_latent_sidecar_root,
+                source_repo_id=data_config.repo_id,
+                required=data_config.future_latent_sidecar_required,
+            )
+        )
+    return transforms
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
@@ -151,6 +174,16 @@ def create_torch_dataset(
             delta_timestamps={
                 key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
             },
+        )
+
+    if data_config.robot_spline_expand_pairings:
+        if data_config.robot_spline_sidecar_root is None:
+            raise ValueError("robot_spline_expand_pairings=True requires robot_spline_sidecar_root to be set.")
+        dataset = _robot_spline_sidecar.RobotSplineExpandedDataset(
+            dataset,
+            sidecar_root=data_config.robot_spline_sidecar_root,
+            source_repo_id=data_config.repo_id,
+            required=data_config.robot_spline_sidecar_required,
         )
 
     if data_config.prompt_from_task:
@@ -188,17 +221,7 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             )
         norm_stats = data_config.norm_stats
 
-    transforms: list[_transforms.DataTransformFn] = []
-    if data_config.future_latent_sidecar_root is not None:
-        if data_config.repo_id is None:
-            raise ValueError("Repo ID is not set. Cannot load future latent sidecar.")
-        transforms.append(
-            _future_latent_sidecar.FutureLatentSidecarTransform(
-                sidecar_root=data_config.future_latent_sidecar_root,
-                source_repo_id=data_config.repo_id,
-                required=data_config.future_latent_sidecar_required,
-            )
-        )
+    transforms = _make_sidecar_transforms(data_config)
 
     return TransformedDataset(
         dataset,
@@ -232,6 +255,7 @@ def transform_iterable_dataset(
     return IterableTransformedDataset(
         dataset,
         [
+            *_make_sidecar_transforms(data_config),
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
             _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
@@ -330,7 +354,11 @@ def create_validation_data_loader(
         raise ValueError("Validation requested, but val_repo_id is not set.")
 
     data_config = config.data.create(config.assets_dirs, config.model)
-    val_data_config = dataclasses.replace(data_config, repo_id=config.val_repo_id)
+    val_data_config = dataclasses.replace(
+        data_config,
+        repo_id=config.val_repo_id,
+        robot_spline_sidecar_root=config.val_robot_spline_sidecar_root or data_config.robot_spline_sidecar_root,
+    )
     val_batch_size = config.resolved_val_batch_size
 
     if val_data_config.rlds_data_dir is not None:
