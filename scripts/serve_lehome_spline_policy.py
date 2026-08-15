@@ -19,6 +19,7 @@ class Args:
     log_payload_summaries: bool = True
     spline_server_url: str = "ws://127.0.0.1:9100"
     fail_on_invalid_spline: bool = True
+    rotate_top_rgb_180: bool = True
     policy: _serve_policy.Checkpoint | _serve_policy.Default = dataclasses.field(default_factory=_serve_policy.Default)
 
 
@@ -35,6 +36,7 @@ def create_policy(args: Args):
         spline_server_url=args.spline_server_url,
         default_prompt=args.default_prompt,
         fail_on_invalid_spline=args.fail_on_invalid_spline,
+        rotate_top_rgb_180=args.rotate_top_rgb_180,
     )
     if args.record:
         from openpi.policies import policy as _policy
@@ -53,6 +55,7 @@ def main(args: Args) -> None:
             "runtime_type": "lehome_spline_openpi_runtime",
             "spline_server_url": args.spline_server_url,
             "default_prompt": args.default_prompt,
+            "rotate_top_rgb_180": bool(args.rotate_top_rgb_180),
         }
     )
     logging.info("Creating LeHome spline OpenPI server (host=%s ip=%s spline=%s)", hostname, local_ip, args.spline_server_url)

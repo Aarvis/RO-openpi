@@ -17,14 +17,35 @@ class LehomeSplineRuntimePolicy(_base_policy.BasePolicy):
         spline_server_url: str,
         default_prompt: str | None = None,
         fail_on_invalid_spline: bool = True,
+        rotate_top_rgb_180: bool = True,
     ) -> None:
         self._openpi_policy = openpi_policy
         self._spline_client = _ws_policy.WebsocketClientPolicy(host=spline_server_url)
         self._default_prompt = default_prompt
         self._fail_on_invalid_spline = bool(fail_on_invalid_spline)
+        self._rotate_top_rgb_180 = bool(rotate_top_rgb_180)
+
+    @staticmethod
+    def _rotate_image_180(image: Any) -> np.ndarray:
+        image_np = np.asarray(image, dtype=np.uint8)
+        if image_np.ndim < 2:
+            raise ValueError(f"Expected image with at least 2 dimensions, got shape={image_np.shape}")
+        return np.ascontiguousarray(np.rot90(image_np, 2, axes=(0, 1)))
+
+    def _prepare_spline_observation(self, obs: dict) -> dict:
+        prepared = dict(obs)
+        if not self._rotate_top_rgb_180:
+            return prepared
+
+        for key in ("observation/top_rgb", "observation.images.top_rgb", "observation.image.top_rgb", "observation.top_rgb"):
+            if key in prepared:
+                prepared[key] = self._rotate_image_180(prepared[key])
+                break
+        return prepared
 
     def infer(self, obs: dict) -> dict:
-        spline_result = self._spline_client.infer(obs)
+        spline_obs = self._prepare_spline_observation(obs)
+        spline_result = self._spline_client.infer(spline_obs)
         prediction_valid = bool(spline_result.get("prediction_valid", False))
         used_last_valid_fallback = bool(spline_result.get("used_last_valid_fallback", False))
 
