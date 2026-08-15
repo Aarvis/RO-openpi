@@ -15,6 +15,8 @@ class Args:
     default_prompt: str | None = None
     record: bool = False
     send_policy_latent: bool = False
+    log_every_n_requests: int = 1
+    log_payload_summaries: bool = True
     spline_server_url: str = "ws://127.0.0.1:9100"
     fail_on_invalid_spline: bool = True
     policy: _serve_policy.Checkpoint | _serve_policy.Default = dataclasses.field(default_factory=_serve_policy.Default)
@@ -59,6 +61,9 @@ def main(args: Args) -> None:
         host="0.0.0.0",
         port=args.port,
         metadata=metadata,
+        log_every_n_requests=int(args.log_every_n_requests),
+        log_payload_summaries=bool(args.log_payload_summaries),
+        log_prefix="openpi-spline-server",
     )
     server.serve_forever()
 
