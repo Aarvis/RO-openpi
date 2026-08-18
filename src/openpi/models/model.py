@@ -108,10 +108,10 @@ class Observation(Generic[ArrayT]):
     robot_spline_knots: at.Float[ArrayT, "*b k"] | None = None
 
     # Optional checkpoint-planner rollout features used by Origami VLA variants.
-    planner_state_belief: at.Float[ArrayT, "*b s"] | None = None
+    planner_state_belief: at.Float[ArrayT, "*b belief"] | None = None
     planner_progress_transition: at.Float[ArrayT, "*b p"] | None = None
     planner_uncertainty: at.Float[ArrayT, "*b u"] | None = None
-    planner_history_latent: at.Float[ArrayT, "*b h"] | None = None
+    planner_history_latent: at.Float[ArrayT, "*b hist"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
