@@ -25,6 +25,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest-root", type=Path, default=None, help="Optional manifest root override.")
     parser.add_argument("--dataset-root", type=Path, default=None, help="Optional dataset root override.")
     parser.add_argument("--max-rows", type=int, default=None, help="Optional cap on train rows.")
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=2048,
+        help="Number of manifest rows to aggregate before updating running statistics.",
+    )
     return parser.parse_args()
 
 
@@ -56,24 +62,54 @@ def main() -> int:
     for row in train_rows.to_dict(orient="records"):
         grouped_rows[str(row["episode_uid"])].append(row)
 
-    for episode_uid in tqdm(sorted(grouped_rows), desc="Norm stats", unit="episode", dynamic_ncols=True):
+    total_rows = len(train_rows)
+    total_episodes = len(grouped_rows)
+    print("Origami VLA normalization stats")
+    print(f"  config_name : {args.config_name}")
+    print(f"  rows        : {total_rows}")
+    print(f"  episodes    : {total_episodes}")
+    print(f"  chunk_size  : {args.chunk_size}")
+
+    row_progress = tqdm(total=total_rows, desc="Norm stats", unit="row", dynamic_ncols=True)
+    for episode_idx, episode_uid in enumerate(sorted(grouped_rows), start=1):
         episode_root = dataset_root / "episodes" / episode_uid
         state = np.load(episode_root / "arrays" / "state_65d.npy", mmap_mode="r")
         archive = np.load(episode_root / "arrays" / settings.local_target_npz_name, allow_pickle=False)
-        for row in grouped_rows[episode_uid]:
-            frame_position = int(row["frame_position"])
-            sample_index = int(row["local_target_npz_sample_index"])
-            control_points, local_knots = _origami_vla_dataset.extract_target_sample(archive, sample_index)
-            span_widths = _origami_vla_dataset.local_knots_to_span_widths(local_knots, settings.degree)
-            actions, action_mask = _origami_vla_dataset.pack_spline_actions(
-                control_points,
-                span_widths,
-                max_control_points=settings.max_control_points,
-                max_span_count=settings.max_span_count,
-                action_dim=settings.action_dim,
+        episode_rows = grouped_rows[episode_uid]
+        for chunk_start in range(0, len(episode_rows), args.chunk_size):
+            chunk_rows = episode_rows[chunk_start : chunk_start + args.chunk_size]
+            frame_positions = np.asarray([int(row["frame_position"]) for row in chunk_rows], dtype=np.int64)
+            state_chunk = np.asarray(state[frame_positions], dtype=np.float32)
+            state_stats.update(state_chunk)
+
+            actions_chunk = np.zeros(
+                (len(chunk_rows), settings.max_control_points + 1, settings.action_dim),
+                dtype=np.float32,
             )
-            state_stats.update(np.asarray(state[frame_position], dtype=np.float32)[None, :])
-            action_stats.update(actions[None, ...], mask=action_mask[None, ...])
+            action_mask_chunk = np.zeros_like(actions_chunk, dtype=bool)
+
+            for sample_offset, row in enumerate(chunk_rows):
+                sample_index = int(row["local_target_npz_sample_index"])
+                control_points, local_knots = _origami_vla_dataset.extract_target_sample(archive, sample_index)
+                span_widths = _origami_vla_dataset.local_knots_to_span_widths(local_knots, settings.degree)
+                actions, action_mask = _origami_vla_dataset.pack_spline_actions(
+                    control_points,
+                    span_widths,
+                    max_control_points=settings.max_control_points,
+                    max_span_count=settings.max_span_count,
+                    action_dim=settings.action_dim,
+                )
+                actions_chunk[sample_offset] = actions
+                action_mask_chunk[sample_offset] = action_mask
+
+            action_stats.update(actions_chunk, mask=action_mask_chunk)
+            row_progress.update(len(chunk_rows))
+            row_progress.set_postfix(
+                episode=f"{episode_idx}/{total_episodes}",
+                episode_uid=episode_uid[-24:],
+            )
+
+    row_progress.close()
 
     norm_stats = {
         "state": state_stats.get_statistics(),
@@ -84,9 +120,6 @@ def main() -> int:
         raise RuntimeError("Could not resolve asset_id for writing norm stats.")
     output_dir = config.assets_dirs / str(asset_id)
     _normalize.save(output_dir, norm_stats)
-    print("Origami VLA normalization stats")
-    print(f"  config_name : {args.config_name}")
-    print(f"  rows        : {len(train_rows)}")
     print(f"  output_dir  : {output_dir}")
     return 0
 
