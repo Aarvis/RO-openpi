@@ -126,31 +126,28 @@ def _basis_matrix(
     left = knots[:, :-1]
     right = knots[:, 1:]
     u_expanded = u[None, :, None]
-    base = ((u_expanded >= left[:, None, :]) & (u_expanded < right[:, None, :])).astype(jnp.float32)
+    base = ((u_expanded >= left[:, None, :]) & (u_expanded < right[:, None, :])).astype(u.dtype)
     basis = base[:, :, :max_control_points]
 
     last_index = jnp.clip(num_ctrl - 1, a_min=0, a_max=max_control_points - 1)
     is_one = jnp.isclose(u, 1.0, atol=eps)
-    one_hot = jax.nn.one_hot(last_index, max_control_points, dtype=jnp.float32)
+    one_hot = jax.nn.one_hot(last_index, max_control_points, dtype=u.dtype)
     basis = jnp.where(is_one[None, :, None], one_hot[:, None, :], basis)
 
     for current_degree in range(1, degree + 1):
         next_basis = []
         for index in range(max_control_points):
             denom_left = knots[:, index + current_degree] - knots[:, index]
-            left_term = jnp.where(
-                denom_left[:, None] > eps,
-                ((u[None, :] - knots[:, index][:, None]) / denom_left[:, None]) * basis[:, :, index],
-                0.0,
-            )
+            safe_denom_left = jnp.where(denom_left > eps, denom_left, 1.0)
+            left_coeff = (u[None, :] - knots[:, index][:, None]) / safe_denom_left[:, None]
+            left_coeff = jnp.where(denom_left[:, None] > eps, left_coeff, 0.0)
+            left_term = left_coeff * basis[:, :, index]
             if index + 1 < max_control_points:
                 denom_right = knots[:, index + current_degree + 1] - knots[:, index + 1]
-                right_term = jnp.where(
-                    denom_right[:, None] > eps,
-                    ((knots[:, index + current_degree + 1][:, None] - u[None, :]) / denom_right[:, None])
-                    * basis[:, :, index + 1],
-                    0.0,
-                )
+                safe_denom_right = jnp.where(denom_right > eps, denom_right, 1.0)
+                right_coeff = (knots[:, index + current_degree + 1][:, None] - u[None, :]) / safe_denom_right[:, None]
+                right_coeff = jnp.where(denom_right[:, None] > eps, right_coeff, 0.0)
+                right_term = right_coeff * basis[:, :, index + 1]
             else:
                 right_term = 0.0
             next_basis.append(left_term + right_term)
@@ -198,13 +195,19 @@ def compute_auxiliary_losses(
     width_weight: float,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
     if all(weight <= 0.0 for weight in (curve_weight, start_weight, end_weight, width_weight)):
-        zeros = jnp.zeros((pred_actions_norm.shape[0],), dtype=pred_actions_norm.dtype)
+        zeros = jnp.zeros((pred_actions_norm.shape[0],), dtype=jnp.float32)
         return zeros, {
             "curve": zeros,
             "start": zeros,
             "end": zeros,
             "width": zeros,
         }
+
+    # Keep the spline auxiliary path in float32 even when the policy itself runs in
+    # bfloat16. This avoids precision loss in de-normalization, knot widths, basis
+    # recursion, and curve sampling.
+    pred_actions_norm = jnp.asarray(pred_actions_norm, dtype=jnp.float32)
+    target_actions_norm = jnp.asarray(target_actions_norm, dtype=jnp.float32)
 
     pred_actions = denormalize_packed_actions(
         pred_actions_norm,
@@ -237,7 +240,7 @@ def compute_auxiliary_losses(
     target_widths = jnp.where(span_mask, target_actions[:, max_control_points, :max_span_count], 0.0)
     target_widths = target_widths / jnp.clip(jnp.sum(target_widths, axis=-1, keepdims=True), a_min=width_min)
 
-    u = jnp.linspace(0.0, 1.0, sample_count, dtype=pred_actions.dtype)
+    u = jnp.linspace(0.0, 1.0, sample_count, dtype=jnp.float32)
     pred_curve = evaluate_batch_splines(
         pred_control,
         pred_widths,
