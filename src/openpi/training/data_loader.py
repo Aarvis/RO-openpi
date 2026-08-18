@@ -16,6 +16,7 @@ import openpi.models.model as _model
 import openpi.training.config as _config
 from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.training.future_latent_sidecar as _future_latent_sidecar
+import openpi.training.origami_vla_dataset as _origami_vla_dataset
 import openpi.training.robot_spline_sidecar as _robot_spline_sidecar
 import openpi.transforms as _transforms
 
@@ -159,6 +160,9 @@ def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
     """Create a dataset for training."""
+    if data_config.origami_vla is not None:
+        return _origami_vla_dataset.OrigamiVlaDataset(data_config.origami_vla, split=data_config.dataset_split)
+
     repo_id = data_config.repo_id
     if repo_id is None:
         raise ValueError("Repo ID is not set. Cannot create dataset.")
@@ -358,6 +362,7 @@ def create_validation_data_loader(
         data_config,
         repo_id=config.val_repo_id,
         robot_spline_sidecar_root=config.val_robot_spline_sidecar_root or data_config.robot_spline_sidecar_root,
+        dataset_split="val" if data_config.origami_vla is not None else data_config.dataset_split,
     )
     val_batch_size = config.resolved_val_batch_size
 

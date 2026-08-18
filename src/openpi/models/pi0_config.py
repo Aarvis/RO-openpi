@@ -89,6 +89,30 @@ class RobotSplineConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class OrigamiVlaConfig:
+    enabled: bool = False
+    belief_dim: int = 39
+    history_dim: int = 512
+    planner_belief_hidden_dims: tuple[int, ...] = (256, 512)
+    planner_progress_hidden_dims: tuple[int, ...] = (128, 512)
+    planner_uncertainty_hidden_dims: tuple[int, ...] = (128, 512)
+    planner_history_hidden_dims: tuple[int, ...] = (1024,)
+    planner_use_type_embeddings: bool = True
+    degree: int = 3
+    max_control_points: int = 18
+    max_span_count: int = 15
+    curve_sample_count: int = 120
+    smooth_l1_beta: float = 0.05
+    curve_loss_weight: float = 0.5
+    start_loss_weight: float = 0.1
+    end_loss_weight: float = 0.25
+    width_loss_weight: float = 0.05
+    width_min: float = 1e-4
+    action_norm_stats_dir: str | None = None
+    use_quantile_norm: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
     dtype: str = "bfloat16"
     paligemma_variant: _gemma.Variant = "gemma_2b"
@@ -98,6 +122,8 @@ class Pi0Config(_model.BaseModelConfig):
     action_dim: int = 32
     action_horizon: int = 50
     max_token_len: int = None  # type: ignore
+    state_dim: int | None = None
+    image_keys: tuple[str, ...] = _model.IMAGE_KEYS
     # Pi05 has two differences from Pi0:
     # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
     # - the action expert uses adaRMSNorm to inject the flow matching timestep
@@ -106,12 +132,29 @@ class Pi0Config(_model.BaseModelConfig):
     discrete_state_input: bool = None  # type: ignore
     future_latent: FutureLatentConfig = dataclasses.field(default_factory=FutureLatentConfig)
     robot_spline: RobotSplineConfig = dataclasses.field(default_factory=RobotSplineConfig)
+    origami_vla: OrigamiVlaConfig = dataclasses.field(default_factory=OrigamiVlaConfig)
 
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)
         if self.discrete_state_input is None:
             object.__setattr__(self, "discrete_state_input", self.pi05)
+        if self.state_dim is None:
+            object.__setattr__(self, "state_dim", self.action_dim)
+        if not self.image_keys:
+            raise ValueError("image_keys must contain at least one image key when using the image prefix.")
+        if self.origami_vla.enabled and not self.pi05:
+            raise ValueError("Origami VLA support is currently implemented only for pi0.5.")
+        if self.origami_vla.enabled and self.action_horizon != self.origami_vla.max_control_points + 1:
+            raise ValueError(
+                "Origami VLA actions are packed as control-point tokens plus one span-width token, "
+                f"so action_horizon must equal {self.origami_vla.max_control_points + 1}, got {self.action_horizon}."
+            )
+        if self.origami_vla.enabled and self.action_dim < self.origami_vla.max_span_count:
+            raise ValueError(
+                f"Origami VLA action_dim ({self.action_dim}) must be >= max_span_count "
+                f"({self.origami_vla.max_span_count})."
+            )
 
     @property
     @override
@@ -136,23 +179,19 @@ class Pi0Config(_model.BaseModelConfig):
             observation_spec = _model.Observation(
                 images=(
                     {
-                        "base_0_rgb": image_spec,
-                        "left_wrist_0_rgb": image_spec,
-                        "right_wrist_0_rgb": image_spec,
+                        key: image_spec for key in self.image_keys
                     }
                     if include_images
                     else {}
                 ),
                 image_masks=(
                     {
-                        "base_0_rgb": image_mask_spec,
-                        "left_wrist_0_rgb": image_mask_spec,
-                        "right_wrist_0_rgb": image_mask_spec,
+                        key: image_mask_spec for key in self.image_keys
                     }
                     if include_images
                     else {}
                 ),
-                state=jax.ShapeDtypeStruct([batch_size, self.action_dim], jnp.float32),
+                state=jax.ShapeDtypeStruct([batch_size, self.state_dim], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
                 future_latent_pred=(
@@ -197,6 +236,26 @@ class Pi0Config(_model.BaseModelConfig):
                 robot_spline_knots=(
                     jax.ShapeDtypeStruct([batch_size, self.robot_spline.knot_count], jnp.float32)
                     if self.robot_spline.enabled
+                    else None
+                ),
+                planner_state_belief=(
+                    jax.ShapeDtypeStruct([batch_size, self.origami_vla.belief_dim], jnp.float32)
+                    if self.origami_vla.enabled
+                    else None
+                ),
+                planner_progress_transition=(
+                    jax.ShapeDtypeStruct([batch_size, 2], jnp.float32)
+                    if self.origami_vla.enabled
+                    else None
+                ),
+                planner_uncertainty=(
+                    jax.ShapeDtypeStruct([batch_size, 3], jnp.float32)
+                    if self.origami_vla.enabled
+                    else None
+                ),
+                planner_history_latent=(
+                    jax.ShapeDtypeStruct([batch_size, self.origami_vla.history_dim], jnp.float32)
+                    if self.origami_vla.enabled
                     else None
                 ),
             )

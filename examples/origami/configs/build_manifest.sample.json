@@ -1,0 +1,36 @@
+{
+  "dataset_root": "D:/Sampled_Reprocessed_Dataset",
+  "checkpoint_planner_manifest_root": "D:/Sampled_Reprocessed_Dataset/metadata/checkpoint_planner_training/no_hmm_v1",
+  "planner_export_root": "D:/Sampled_Reprocessed_Dataset/metadata/checkpoint_planner_vla_rollout_exports/no_hmm_v1",
+  "output_root": "D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1",
+  "local_target_parquet_name": "local_delta_reached_state_targets_K15_include_current_restrict_true_state.parquet",
+  "local_target_npz_name": "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz",
+  "planner_index_filename": "planner_vla_rollout_index.parquet",
+  "planner_arrays_filename": "planner_vla_rollout_features.npz",
+  "train_index_name": "train_index.parquet",
+  "val_index_name": "val_index.parquet",
+  "train_view_modes": [
+    "fixed_3",
+    "fixed_7",
+    "fixed_15",
+    "random_mix"
+  ],
+  "val_view_modes": [
+    "fixed_3",
+    "fixed_7",
+    "fixed_15"
+  ],
+  "image_modalities": {
+    "ooi_rgb": "videos/ooi.mp4",
+    "base_0_rgb": "videos/head_left.mp4",
+    "left_wrist_0_rgb": "videos/wrist_left.mp4",
+    "right_wrist_0_rgb": "videos/wrist_right.mp4"
+  },
+  "drop_horizon_clipped": false,
+  "fail_on_missing_modalities": true,
+  "selection": {
+    "episode_uids": [],
+    "start_index": 0,
+    "max_episodes": null
+  }
+}

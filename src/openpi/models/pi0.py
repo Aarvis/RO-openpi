@@ -6,14 +6,19 @@ import flax.nnx as nnx
 import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
+import numpy as np
 from typing_extensions import override
 
 from openpi.models import model as _model
 from openpi.models import pi0_config
+import openpi.models.origami_planner_adapter as _origami_planner_adapter
+import openpi.models.origami_spline_losses as _origami_spline_losses
 import openpi.models.robot_spline_adapter as _robot_spline_adapter
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
+import openpi.shared.download as _download
+import openpi.shared.normalize as _normalize
 
 logger = logging.getLogger("openpi")
 
@@ -82,15 +87,38 @@ class FutureLatentPolicyAdapter(nnx.Module):
         return tokens, token_mask
 
 
+def _load_origami_action_stats(
+    stats_dir: str | None,
+) -> _origami_spline_losses.ActionNormStats | None:
+    if not stats_dir:
+        return None
+    try:
+        loaded = _normalize.load(_download.maybe_download(stats_dir))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Origami VLA action normalization stats were not found under {stats_dir}. "
+            "Run scripts/compute_origami_vla_norm_stats.py before training."
+        ) from exc
+    if "actions" not in loaded:
+        raise KeyError(f"Expected 'actions' normalization stats under {stats_dir}")
+    stats = loaded["actions"]
+    return _origami_spline_losses.ActionNormStats(
+        mean=jnp.asarray(np.asarray(stats.mean), dtype=jnp.float32),
+        std=jnp.asarray(np.asarray(stats.std), dtype=jnp.float32),
+        q01=None if stats.q01 is None else jnp.asarray(np.asarray(stats.q01), dtype=jnp.float32),
+        q99=None if stats.q99 is None else jnp.asarray(np.asarray(stats.q99), dtype=jnp.float32),
+    )
+
+
 class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
         self.pi05 = config.pi05
         self.future_latent_config = config.future_latent
         self.robot_spline_config = config.robot_spline
-        self.image_keys = (
-            _model.IMAGE_KEYS if not (config.robot_spline.enabled and not config.robot_spline.use_image_prefix) else ()
-        )
+        self.origami_vla_config = config.origami_vla
+        self.origami_action_stats = _load_origami_action_stats(config.origami_vla.action_norm_stats_dir)
+        self.image_keys = config.image_keys if not (config.robot_spline.enabled and not config.robot_spline.use_image_prefix) else ()
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
         # TODO: rewrite gemma in NNX. For now, use bridge.
@@ -143,6 +171,27 @@ class Pi0(_model.BaseModel):
                     dtype=jnp.float32,
                 ),
                 jnp.zeros((1, config.robot_spline.knot_count), dtype=jnp.float32),
+                train=False,
+                rngs=rngs,
+            )
+        if config.origami_vla.enabled:
+            self.origami_planner_adapter = nnx_bridge.ToNNX(
+                _origami_planner_adapter.OrigamiPlannerPrefixAdapter(
+                    belief_dim=config.origami_vla.belief_dim,
+                    history_dim=config.origami_vla.history_dim,
+                    output_dim=paligemma_config.width,
+                    belief_hidden_dims=config.origami_vla.planner_belief_hidden_dims,
+                    progress_hidden_dims=config.origami_vla.planner_progress_hidden_dims,
+                    uncertainty_hidden_dims=config.origami_vla.planner_uncertainty_hidden_dims,
+                    history_hidden_dims=config.origami_vla.planner_history_hidden_dims,
+                    use_type_embeddings=config.origami_vla.planner_use_type_embeddings,
+                )
+            )
+            self.origami_planner_adapter.lazy_init(
+                jnp.zeros((1, config.origami_vla.belief_dim), dtype=jnp.float32),
+                jnp.zeros((1, 2), dtype=jnp.float32),
+                jnp.zeros((1, 3), dtype=jnp.float32),
+                jnp.zeros((1, config.origami_vla.history_dim), dtype=jnp.float32),
                 train=False,
                 rngs=rngs,
             )
@@ -252,6 +301,28 @@ class Pi0(_model.BaseModel):
             input_mask.append(future_mask)
             ar_mask += [False] * future_tokens.shape[1]
 
+        if self.origami_vla_config.enabled:
+            required = (
+                obs.planner_state_belief,
+                obs.planner_progress_transition,
+                obs.planner_uncertainty,
+                obs.planner_history_latent,
+            )
+            if any(value is None for value in required):
+                raise ValueError("Origami planner conditioning is enabled, but planner rollout features are missing.")
+            planner_tokens = self.origami_planner_adapter(
+                jnp.asarray(obs.planner_state_belief),
+                jnp.asarray(obs.planner_progress_transition),
+                jnp.asarray(obs.planner_uncertainty),
+                jnp.asarray(obs.planner_history_latent),
+                train=train,
+            )
+            if tokens:
+                planner_tokens = planner_tokens.astype(tokens[0].dtype)
+            tokens.append(planner_tokens)
+            input_mask.append(jnp.ones(planner_tokens.shape[:2], dtype=jnp.bool_))
+            ar_mask += [False] * planner_tokens.shape[1]
+
         if not tokens:
             raise ValueError("Prefix construction produced no tokens. Provide at least language/state tokens or another prefix modality.")
         tokens = jnp.concatenate(tokens, axis=1)
@@ -309,9 +380,9 @@ class Pi0(_model.BaseModel):
         return tokens, input_mask, ar_mask, adarms_cond
 
     @override
-    def compute_loss(
+    def compute_loss_and_metrics(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
-    ) -> at.Float[at.Array, "*b ah"]:
+    ) -> tuple[at.Float[at.Array, "*b ah"], dict[str, at.Array]]:
         preprocess_rng, future_rng, noise_rng, time_rng = jax.random.split(rng, 4)
         observation = _model.preprocess_observation(
             preprocess_rng,
@@ -344,9 +415,67 @@ class Pi0(_model.BaseModel):
             action_mask = jnp.asarray(observation.action_mask, dtype=sq_error.dtype)
             action_mask = jnp.broadcast_to(action_mask, sq_error.shape)
             denom = jnp.clip(jnp.sum(action_mask, axis=-1), 1.0)
-            return jnp.sum(sq_error * action_mask, axis=-1) / denom
+            base_loss = jnp.sum(sq_error * action_mask, axis=-1) / denom
+        else:
+            action_mask = jnp.ones_like(sq_error, dtype=jnp.float32)
+            base_loss = jnp.mean(sq_error, axis=-1)
 
-        return jnp.mean(sq_error, axis=-1)
+        base_loss_mean = jnp.mean(base_loss)
+        if not self.origami_vla_config.enabled:
+            return base_loss, {
+                "loss": base_loss_mean,
+                "loss_total": base_loss_mean,
+                "loss_base_flow": base_loss_mean,
+            }
+
+        pred_actions_for_aux = x_t - time_expanded * v_t
+        aux_loss, aux_terms = _origami_spline_losses.compute_auxiliary_losses(
+            pred_actions_for_aux,
+            actions,
+            action_mask,
+            stats=self.origami_action_stats,
+            use_quantiles=self.origami_vla_config.use_quantile_norm,
+            degree=self.origami_vla_config.degree,
+            max_control_points=self.origami_vla_config.max_control_points,
+            max_span_count=self.origami_vla_config.max_span_count,
+            sample_count=self.origami_vla_config.curve_sample_count,
+            smooth_l1_beta=self.origami_vla_config.smooth_l1_beta,
+            width_min=self.origami_vla_config.width_min,
+            curve_weight=self.origami_vla_config.curve_loss_weight,
+            start_weight=self.origami_vla_config.start_loss_weight,
+            end_weight=self.origami_vla_config.end_loss_weight,
+            width_weight=self.origami_vla_config.width_loss_weight,
+        )
+        total_loss = base_loss + aux_loss[:, None]
+
+        curve_raw = jnp.mean(aux_terms["curve"])
+        start_raw = jnp.mean(aux_terms["start"])
+        end_raw = jnp.mean(aux_terms["end"])
+        width_raw = jnp.mean(aux_terms["width"])
+        aux_total = jnp.mean(aux_loss)
+        total_mean = jnp.mean(total_loss)
+
+        return total_loss, {
+            "loss": total_mean,
+            "loss_total": total_mean,
+            "loss_base_flow": base_loss_mean,
+            "loss_aux_total": aux_total,
+            "loss_curve_raw": curve_raw,
+            "loss_start_raw": start_raw,
+            "loss_end_raw": end_raw,
+            "loss_width_raw": width_raw,
+            "loss_curve_weighted": self.origami_vla_config.curve_loss_weight * curve_raw,
+            "loss_start_weighted": self.origami_vla_config.start_loss_weight * start_raw,
+            "loss_end_weighted": self.origami_vla_config.end_loss_weight * end_raw,
+            "loss_width_weighted": self.origami_vla_config.width_loss_weight * width_raw,
+        }
+
+    @override
+    def compute_loss(
+        self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
+    ) -> at.Float[at.Array, "*b ah"]:
+        chunked_loss, _ = self.compute_loss_and_metrics(rng, observation, actions, train=train)
+        return chunked_loss
 
     def _compute_prefix_cache(
         self,

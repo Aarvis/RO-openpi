@@ -25,6 +25,7 @@ import openpi.policies.lehome_robot_spline_policy as lehome_robot_spline_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
+import openpi.training.origami_vla_dataset as _origami_vla_dataset
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
 import openpi.training.misc.polaris_config as polaris_config
 import openpi.training.misc.roboarena_config as roboarena_config
@@ -108,6 +109,8 @@ class DataConfig:
     future_latent_sidecar_root: str | None = None
     future_latent_filter_included_datasets: bool = False
     future_latent_sidecar_required: bool = True
+    origami_vla: _origami_vla_dataset.OrigamiVlaSettings | None = None
+    dataset_split: Literal["train", "val", "all"] = "train"
 
     # Only used for RLDS data loader (ie currently only used for DROID).
     rlds_data_dir: str | None = None
@@ -266,6 +269,57 @@ class SimpleDataConfig(DataConfigFactory):
             self.create_base_config(assets_dirs, model_config),
             data_transforms=self.data_transforms(model_config),
             model_transforms=self.model_transforms(model_config),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class OrigamiVlaDataConfig(DataConfigFactory):
+    dataset_root: str = "D:/Sampled_Reprocessed_Dataset"
+    manifest_root: str = "D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1"
+    prompt: str = "fold paper into airplane"
+    local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
+    planner_arrays_filename: str = "planner_vla_rollout_features.npz"
+    planner_index_filename: str = "planner_vla_rollout_index.parquet"
+    fail_on_missing_modalities: bool = True
+    max_rows: int | None = None
+    image_modalities: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "ooi_rgb": "videos/ooi.mp4",
+            "base_0_rgb": "videos/head_left.mp4",
+            "left_wrist_0_rgb": "videos/wrist_left.mp4",
+            "right_wrist_0_rgb": "videos/wrist_right.mp4",
+        }
+    )
+    model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        if not isinstance(model_config, pi0_config.Pi0Config):
+            raise TypeError("Origami VLA config currently expects a Pi0Config model.")
+        if not model_config.origami_vla.enabled:
+            raise ValueError("Origami VLA data config requires model.origami_vla.enabled=True.")
+
+        settings = _origami_vla_dataset.OrigamiVlaSettings(
+            dataset_root=self.dataset_root,
+            manifest_root=self.manifest_root,
+            local_target_npz_name=self.local_target_npz_name,
+            planner_arrays_filename=self.planner_arrays_filename,
+            planner_index_filename=self.planner_index_filename,
+            max_control_points=model_config.origami_vla.max_control_points,
+            max_span_count=model_config.origami_vla.max_span_count,
+            degree=model_config.origami_vla.degree,
+            state_dim=int(model_config.state_dim or model_config.action_dim),
+            action_dim=model_config.action_dim,
+            prompt=self.prompt,
+            image_modalities=dict(self.image_modalities),
+            fail_on_missing_modalities=self.fail_on_missing_modalities,
+            max_rows=self.max_rows,
+        )
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            model_transforms=self.model_transforms(model_config),
+            origami_vla=settings,
+            dataset_split="train",
         )
 
 
@@ -1156,6 +1210,25 @@ class TrainConfig:
         return self.val_batch_size or self.batch_size
 
     def __post_init__(self) -> None:
+        if (
+            isinstance(self.model, pi0_config.Pi0Config)
+            and self.model.origami_vla.enabled
+            and self.model.origami_vla.action_norm_stats_dir is None
+            and isinstance(self.data, OrigamiVlaDataConfig)
+        ):
+            asset_id = self.data.assets.asset_id or self.data.repo_id
+            norm_stats_dir = (pathlib.Path(self.assets_base_dir) / self.name / str(asset_id)).resolve()
+            object.__setattr__(
+                self,
+                "model",
+                dataclasses.replace(
+                    self.model,
+                    origami_vla=dataclasses.replace(
+                        self.model.origami_vla,
+                        action_norm_stats_dir=str(norm_stats_dir),
+                    ),
+                ),
+            )
         if self.resume and self.overwrite:
             raise ValueError("Cannot resume and overwrite at the same time.")
         if self.run_val and not self.val_repo_id:
@@ -2196,6 +2269,70 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+    ),
+    TrainConfig(
+        name="pi05_origami_checkpoint_spline_vla",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=65,
+            state_dim=65,
+            action_horizon=19,
+            max_token_len=320,
+            discrete_state_input=True,
+            image_keys=("ooi_rgb", "base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"),
+            origami_vla=pi0_config.OrigamiVlaConfig(
+                enabled=True,
+                belief_dim=39,
+                history_dim=512,
+                planner_belief_hidden_dims=(256, 512),
+                planner_progress_hidden_dims=(128, 512),
+                planner_uncertainty_hidden_dims=(128, 512),
+                planner_history_hidden_dims=(1024,),
+                planner_use_type_embeddings=True,
+                degree=3,
+                max_control_points=18,
+                max_span_count=15,
+                curve_sample_count=120,
+                smooth_l1_beta=0.05,
+                curve_loss_weight=0.5,
+                start_loss_weight=0.1,
+                end_loss_weight=0.25,
+                width_loss_weight=0.05,
+                width_min=1e-4,
+                use_quantile_norm=True,
+            ),
+        ),
+        data=OrigamiVlaDataConfig(
+            repo_id="local/origami_sampled_vla",
+            assets=AssetsConfig(asset_id="sampled_reprocessed_dataset_origami_vla"),
+            dataset_root="D:/Sampled_Reprocessed_Dataset",
+            manifest_root="D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1",
+            prompt="fold paper into airplane",
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "gs://openpi-assets/checkpoints/pi05_base/params",
+            missing_regex=".*(lora|origami_planner_adapter|action_in_proj|action_out_proj).*",
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=2e-4,
+            decay_steps=60_000,
+            decay_lr=2e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        batch_size=32,
+        num_workers=8,
+        num_train_steps=60_000,
+        log_interval=100,
+        run_val=True,
+        val_repo_id="local/origami_sampled_vla",
+        val_frequency=2_000,
+        val_batch_size=32,
+        checkpoint_strategy="manual",
+        save_interval=5_000,
+        keep_period=10_000,
+        max_to_keep=3,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.

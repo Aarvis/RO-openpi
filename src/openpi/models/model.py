@@ -107,6 +107,12 @@ class Observation(Generic[ArrayT]):
     robot_spline_coefficients: at.Float[ArrayT, "*b n d"] | None = None
     robot_spline_knots: at.Float[ArrayT, "*b k"] | None = None
 
+    # Optional checkpoint-planner rollout features used by Origami VLA variants.
+    planner_state_belief: at.Float[ArrayT, "*b s"] | None = None
+    planner_progress_transition: at.Float[ArrayT, "*b p"] | None = None
+    planner_uncertainty: at.Float[ArrayT, "*b u"] | None = None
+    planner_history_latent: at.Float[ArrayT, "*b h"] | None = None
+
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
     # Tokenized prompt mask.
@@ -143,6 +149,10 @@ class Observation(Generic[ArrayT]):
             future_latent_valid_mask=data.get("future_latent_valid_mask"),
             robot_spline_coefficients=data.get("robot_spline_coefficients"),
             robot_spline_knots=data.get("robot_spline_knots"),
+            planner_state_belief=data.get("planner_state_belief"),
+            planner_progress_transition=data.get("planner_progress_transition"),
+            planner_uncertainty=data.get("planner_uncertainty"),
+            planner_history_latent=data.get("planner_history_latent"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -228,6 +238,10 @@ def preprocess_observation(
         future_latent_valid_mask=observation.future_latent_valid_mask,
         robot_spline_coefficients=observation.robot_spline_coefficients,
         robot_spline_knots=observation.robot_spline_knots,
+        planner_state_belief=observation.planner_state_belief,
+        planner_progress_transition=observation.planner_progress_transition,
+        planner_uncertainty=observation.planner_uncertainty,
+        planner_history_latent=observation.planner_history_latent,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
@@ -305,6 +319,21 @@ class BaseModel(nnx.Module, abc.ABC):
         *,
         train: bool = False,
     ) -> at.Float[at.Array, "*b ah"]: ...
+
+    def compute_loss_and_metrics(
+        self,
+        rng: at.KeyArrayLike,
+        observation: Observation,
+        actions: Actions,
+        *,
+        train: bool = False,
+    ) -> tuple[at.Float[at.Array, "*b ah"], dict[str, at.Array]]:
+        chunked_loss = self.compute_loss(rng, observation, actions, train=train)
+        loss = jnp.mean(chunked_loss)
+        return chunked_loss, {
+            "loss": loss,
+            "loss_total": loss,
+        }
 
     @abc.abstractmethod
     def sample_actions(self, rng: at.KeyArrayLike, observation: Observation, **kwargs) -> Actions: ...

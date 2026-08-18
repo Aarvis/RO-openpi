@@ -654,6 +654,11 @@ python dik_solver_workflow/utils/plot_obs_ee_xyz_camera_frame.py \
 python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7   --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://57.128.84.121:8000,ws://57.128.84.121:8001,ws://57.128.84.121:8002,ws://57.128.84.121:8003 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
 
 
+python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 5  --max_workers 1   --gpu_ids 0  --policy_type openpi_spline_ws --worker_timeout_sec 86400  --policy_paths ws://198.53.64.194:34171 --step_hz 30  --sim_device cpu  --device cpu --time-analytics
+
+python -m parallel_eval.main --headless --enable_cameras --garment_type custom --num_episodes 5 --max_workers 1 --gpu_ids 0 --policy_type openpi_spline_ws --worker_timeout_sec 86400 --policy_base_ws_url ws://198.53.64.194 --policy_start_port 34171 --policy_server_count 1 --step_hz 30 --sim_device cpu --device cpu --time-analytics
+
+
 xdpyinfo -display :99 >/dev/null && echo "DISPLAY OK" && python -m parallel_eval   --headless   --enable_cameras   --garment_type custom   --num_episodes 20  --max_workers 8   --gpu_ids 0,1,2,3,4,5,6,7 --ramp_up_episode_gate 1   --worker_timeout_sec 86400   --policy_type openpi_ws   --policy_paths ws://106.185.159.136:21034,ws://106.185.159.136:21801,ws://106.185.159.136:21761,ws://106.185.159.136:21720  --step_hz 30  --sim_device cpu  --device cpu --time-analytics --use_random_seed --allow_duplicate_garments --record_for_ppo_rollout --no-record_keep_frame_images
 
 

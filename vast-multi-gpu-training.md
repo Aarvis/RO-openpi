@@ -141,8 +141,8 @@ export HF_DATASETS_CACHE=/workspace/.hf_home/datasets
 export TMPDIR=/workspace/tmp
 
 export CUDA_DEVICE_ORDER=PCI_BUS_ID
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.98
+export CUDA_VISIBLE_DEVICES=0
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.96
 
 export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
@@ -261,6 +261,13 @@ uv run scripts/multi_serve_policy.py \
   --policy.config pi05_lehome_camera_cv_multi_cotrain_robot_finetune_future_latent \
   --policy.dir /workspace/LEHOME/lehome-openpi/cotrain_base_future_latent_sim_only_trial_1500
 
+
+uv run scripts/serve_lehome_spline_policy.py \
+  --port 8000 \
+  --spline-server-url ws://127.0.0.1:9100 \
+  policy:checkpoint \
+  --policy.config pi05_lehome_robot_spline_joint_delta_finetune \
+  --policy.dir /workspace/models/checkpoints/pi05_lehome_robot_spline_joint_delta_finetune/robot_spline_joint_delta_run01/3400
 
 mkdir -p /scratch/cache/openpi
 export OPENPI_DATA_HOME=/scratch/cache/openpi
