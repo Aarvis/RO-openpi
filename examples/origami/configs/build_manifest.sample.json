@@ -1,8 +1,8 @@
 {
-  "dataset_root": "D:/Sampled_Reprocessed_Dataset",
-  "checkpoint_planner_manifest_root": "D:/Sampled_Reprocessed_Dataset/metadata/checkpoint_planner_training/no_hmm_v1",
-  "planner_export_root": "D:/Sampled_Reprocessed_Dataset/metadata/checkpoint_planner_vla_rollout_exports/no_hmm_v1",
-  "output_root": "D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1",
+  "dataset_root": "/home/sesterce/workspace/Sample_RO_Dataset",
+  "checkpoint_planner_manifest_root": "/home/sesterce/workspace/Sample_RO_Dataset/metadata/checkpoint_planner_training/no_hmm_v1",
+  "planner_export_root": "/home/sesterce/workspace/Sample_RO_Dataset/metadata/checkpoint_planner_vla_rollout_exports/no_hmm_v1_model_0015000",
+  "output_root": "/home/sesterce/workspace/Sample_RO_Dataset/metadata/openpi_origami_vla/no_hmm_v1_model_0015000",
   "local_target_parquet_name": "local_delta_reached_state_targets_K15_include_current_restrict_true_state.parquet",
   "local_target_npz_name": "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz",
   "speed_weight_parquet_name": "origami_vla_speed_weights_a1p5_wmin0p5_wmax2p0.parquet",
@@ -19,9 +19,6 @@
     "random_mix"
   ],
   "val_view_modes": [
-    "fixed_3",
-    "fixed_7",
-    "fixed_15"
   ],
   "image_modalities": {
     "ooi_rgb": "videos/ooi.mp4",
