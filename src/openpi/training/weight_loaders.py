@@ -87,17 +87,35 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
     """
     flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
     flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+    pattern = re.compile(missing_regex)
 
     # First, take all weights that are a subset of the reference weights.
     result = {}
     for k, v in flat_loaded.items():
         if k in flat_ref:
-            result[k] = v.astype(flat_ref[k].dtype) if v.dtype != flat_ref[k].dtype else v
+            ref_value = flat_ref[k]
+            loaded_shape = tuple(v.shape) if hasattr(v, "shape") else None
+            ref_shape = tuple(ref_value.shape) if hasattr(ref_value, "shape") else None
+
+            if loaded_shape is not None and ref_shape is not None and loaded_shape != ref_shape:
+                if pattern.fullmatch(k):
+                    logger.info(
+                        "Skipping checkpoint parameter %s due to shape mismatch: checkpoint=%s model=%s; "
+                        "using fresh initialization from missing_regex.",
+                        k,
+                        loaded_shape,
+                        ref_shape,
+                    )
+                    continue
+                raise ValueError(
+                    f"Checkpoint parameter shape mismatch for {k}: checkpoint={loaded_shape}, model={ref_shape}"
+                )
+
+            result[k] = v.astype(ref_value.dtype) if v.dtype != ref_value.dtype else v
 
     flat_loaded.clear()
 
     # Then, merge any missing weights as defined by the missing regex.
-    pattern = re.compile(missing_regex)
     for k in {k for k in flat_ref if pattern.fullmatch(k)}:
         if k not in result:
             result[k] = flat_ref[k]
