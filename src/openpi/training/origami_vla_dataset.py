@@ -24,6 +24,8 @@ class OrigamiVlaSettings:
     state_dim: int = 65
     action_dim: int = 65
     prompt: str = "Fold paper into airplane"
+    sample_weight_column: str = "sample_weight"
+    require_sample_weight: bool = False
     image_modalities: dict[str, str] = dataclasses.field(
         default_factory=lambda: {
             "ooi_rgb": "videos/ooi.mp4",
@@ -237,6 +239,19 @@ class OrigamiVlaDataset:
         if state.shape[-1] != self._settings.state_dim:
             raise ValueError(f"Expected state dim {self._settings.state_dim}, got {state.shape[-1]}")
 
+        if self._settings.require_sample_weight and self._settings.sample_weight_column not in row:
+            raise KeyError(
+                f"Manifest row for {episode_uid} is missing required sample-weight column "
+                f"{self._settings.sample_weight_column!r}"
+            )
+        sample_weight_value = row.get(self._settings.sample_weight_column, 1.0)
+        if pd.isna(sample_weight_value):
+            if self._settings.require_sample_weight:
+                raise ValueError(
+                    f"Manifest row for {episode_uid} frame_position={frame_position} has NaN sample weight."
+                )
+            sample_weight_value = 1.0
+
         return {
             "image": images,
             "image_mask": image_masks,
@@ -244,6 +259,7 @@ class OrigamiVlaDataset:
             "state_mask": np.ones((self._settings.state_dim,), dtype=bool),
             "actions": actions,
             "action_mask": action_mask,
+            "sample_weight": np.asarray(float(sample_weight_value), dtype=np.float32),
             "prompt": np.asarray(self._settings.prompt),
             "planner_state_belief": np.asarray(planner["final_state_belief"][planner_row_index], dtype=np.float32),
             "planner_progress_transition": np.asarray(

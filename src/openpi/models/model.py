@@ -65,6 +65,7 @@ IMAGE_RESOLUTION = (224, 224)
 #     },
 #     "state": float32[*b, s],  # Low-dimensional robot state
 #     "action_mask": bool[*b, ah, ad],  # Optional, loss mask for continuous action dimensions
+#     "sample_weight": float32[*b],  # Optional, per-sample training weight
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, l],  # Optional, autoregressive mask for FAST model
@@ -96,6 +97,8 @@ class Observation(Generic[ArrayT]):
     state: at.Float[ArrayT, "*b s"]
     # Optional mask for continuous action loss.
     action_mask: at.Bool[ArrayT, "*b ah ad"] | None = None
+    # Optional per-sample training weight.
+    sample_weight: at.Float[ArrayT, "*b"] | None = None
 
     # Optional compact future visual latents used by future-latent-conditioned policies.
     # Shape convention: [*b, cameras, latent_tokens, latent_dim].
@@ -144,6 +147,7 @@ class Observation(Generic[ArrayT]):
             image_masks=image_mask_dict,
             state=data["state"],
             action_mask=data.get("action_mask"),
+            sample_weight=data.get("sample_weight"),
             future_latent_pred=data.get("future_latent_pred"),
             future_latent_true=data.get("future_latent_true"),
             future_latent_valid_mask=data.get("future_latent_valid_mask"),
@@ -233,6 +237,7 @@ def preprocess_observation(
         image_masks=out_masks,
         state=observation.state,
         action_mask=observation.action_mask,
+        sample_weight=observation.sample_weight,
         future_latent_pred=observation.future_latent_pred,
         future_latent_true=observation.future_latent_true,
         future_latent_valid_mask=observation.future_latent_valid_mask,
@@ -247,6 +252,47 @@ def preprocess_observation(
         token_ar_mask=observation.token_ar_mask,
         token_loss_mask=observation.token_loss_mask,
     )
+
+
+def reduce_batch_metric(
+    values: at.Array,
+    sample_weight: at.Array | None,
+    *,
+    normalize: bool = True,
+    eps: float = 1.0e-6,
+) -> at.Array:
+    """Reduce a batch metric, optionally applying per-sample weights.
+
+    `values` is expected to have shape `[batch..., ...]`, where the leading dimensions
+    match `sample_weight.shape`. Any remaining trailing dimensions are averaged within
+    each sample before applying the weighted batch reduction.
+    """
+
+    values = jnp.asarray(values)
+    if sample_weight is None:
+        return jnp.mean(values)
+
+    weights = jnp.asarray(sample_weight, dtype=values.dtype)
+    batch_ndim = weights.ndim
+    if values.ndim < batch_ndim:
+        raise ValueError(
+            f"values.ndim ({values.ndim}) must be >= sample_weight.ndim ({batch_ndim})"
+        )
+    if tuple(values.shape[:batch_ndim]) != tuple(weights.shape):
+        raise ValueError(
+            f"values leading shape {values.shape[:batch_ndim]} does not match sample_weight shape {weights.shape}"
+        )
+
+    per_sample = values
+    if values.ndim > batch_ndim:
+        per_sample = jnp.mean(values, axis=tuple(range(batch_ndim, values.ndim)))
+
+    flat_values = jnp.reshape(per_sample, (-1,))
+    flat_weights = jnp.reshape(jnp.maximum(weights, 0.0), (-1,))
+    if normalize:
+        denom = jnp.maximum(jnp.sum(flat_weights), jnp.asarray(eps, dtype=flat_weights.dtype))
+        return jnp.sum(flat_values * flat_weights) / denom
+    return jnp.mean(flat_values * flat_weights)
 
 
 @dataclasses.dataclass(frozen=True)

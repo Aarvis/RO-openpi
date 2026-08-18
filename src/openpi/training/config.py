@@ -280,6 +280,8 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
     planner_arrays_filename: str = "planner_vla_rollout_features.npz"
     planner_index_filename: str = "planner_vla_rollout_index.parquet"
+    sample_weight_column: str = "sample_weight"
+    require_sample_weight: bool = False
     fail_on_missing_modalities: bool = True
     max_rows: int | None = None
     image_modalities: dict[str, str] = dataclasses.field(
@@ -311,6 +313,8 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             state_dim=int(model_config.state_dim or model_config.action_dim),
             action_dim=model_config.action_dim,
             prompt=self.prompt,
+            sample_weight_column=self.sample_weight_column,
+            require_sample_weight=self.require_sample_weight,
             image_modalities=dict(self.image_modalities),
             fail_on_missing_modalities=self.fail_on_missing_modalities,
             max_rows=self.max_rows,
@@ -2300,6 +2304,9 @@ _CONFIGS = [
                 width_loss_weight=0.05,
                 width_min=1e-4,
                 use_quantile_norm=True,
+                use_speed_efficiency_weight=True,
+                normalize_speed_efficiency_weighted_loss=True,
+                speed_efficiency_weight_eps=1.0e-6,
             ),
         ),
         data=OrigamiVlaDataConfig(
@@ -2308,6 +2315,8 @@ _CONFIGS = [
             dataset_root="D:/Sampled_Reprocessed_Dataset",
             manifest_root="D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1",
             prompt="fold paper into airplane",
+            sample_weight_column="sample_weight",
+            require_sample_weight=True,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",

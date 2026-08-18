@@ -111,6 +111,13 @@ class OrigamiVlaConfig:
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
     disable_auxiliary_losses: bool = False
+    use_speed_efficiency_weight: bool = True
+    normalize_speed_efficiency_weighted_loss: bool = True
+    speed_efficiency_weight_eps: float = 1.0e-6
+
+    def __post_init__(self) -> None:
+        if self.speed_efficiency_weight_eps <= 0.0:
+            raise ValueError("speed_efficiency_weight_eps must be > 0")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -193,6 +200,7 @@ class Pi0Config(_model.BaseModelConfig):
                     else {}
                 ),
                 state=jax.ShapeDtypeStruct([batch_size, self.state_dim], jnp.float32),
+                sample_weight=jax.ShapeDtypeStruct([batch_size], jnp.float32),
                 tokenized_prompt=jax.ShapeDtypeStruct([batch_size, self.max_token_len], jnp.int32),
                 tokenized_prompt_mask=jax.ShapeDtypeStruct([batch_size, self.max_token_len], bool),
                 future_latent_pred=(

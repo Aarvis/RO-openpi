@@ -50,6 +50,9 @@ def build_split_frame(
     episode_uids: list[str],
     view_modes: list[str],
     local_target_parquet_name: str,
+    speed_weight_parquet_name: str | None,
+    sample_weight_column: str,
+    require_speed_weights: bool,
     planner_index_filename: str,
     planner_export_root: Path,
     image_modalities: dict[str, str],
@@ -90,6 +93,52 @@ def build_split_frame(
                 "npz_sample_index": "local_target_npz_sample_index",
             }
         )
+
+        if speed_weight_parquet_name:
+            speed_weight_path = episode_root / "arrays" / speed_weight_parquet_name
+            if not speed_weight_path.exists():
+                if require_speed_weights:
+                    raise FileNotFoundError(
+                        f"Speed-weight sidecar missing for {episode_uid}: {speed_weight_path}"
+                    )
+                base["sample_weight"] = 1.0
+            else:
+                weight_frame = pd.read_parquet(speed_weight_path)
+                if sample_weight_column not in weight_frame.columns:
+                    raise KeyError(
+                        f"Speed-weight parquet missing column {sample_weight_column!r}: {speed_weight_path}"
+                    )
+                weight_frame = weight_frame[
+                    [
+                        "episode_uid",
+                        "current_frame_position",
+                        "current_frame_index",
+                        "npz_sample_index",
+                        sample_weight_column,
+                    ]
+                ].rename(
+                    columns={
+                        "current_frame_position": "frame_position",
+                        "current_frame_index": "frame_index",
+                        "npz_sample_index": "local_target_npz_sample_index",
+                        sample_weight_column: "sample_weight",
+                    }
+                )
+                base = base.merge(
+                    weight_frame,
+                    on=["episode_uid", "frame_position", "frame_index", "local_target_npz_sample_index"],
+                    how="left",
+                    validate="one_to_one",
+                )
+                if require_speed_weights and base["sample_weight"].isna().any():
+                    missing_count = int(base["sample_weight"].isna().sum())
+                    raise RuntimeError(
+                        f"Missing sample weights for {missing_count} local target rows in {episode_uid} "
+                        f"after merging {speed_weight_path}"
+                    )
+                base["sample_weight"] = base["sample_weight"].fillna(1.0).astype("float32")
+        else:
+            base["sample_weight"] = 1.0
 
         for view_mode in view_modes:
             planner_output_dir = planner_export_root / episode_uid / view_mode
@@ -153,6 +202,11 @@ def main() -> int:
         episode_uids=train_episodes,
         view_modes=[str(v) for v in cfg["train_view_modes"]],
         local_target_parquet_name=str(cfg["local_target_parquet_name"]),
+        speed_weight_parquet_name=(
+            str(cfg["speed_weight_parquet_name"]) if cfg.get("speed_weight_parquet_name") else None
+        ),
+        sample_weight_column=str(cfg.get("sample_weight_column", "sample_weight")),
+        require_speed_weights=bool(cfg.get("require_speed_weights", False)),
         planner_index_filename=str(cfg.get("planner_index_filename", "planner_vla_rollout_index.parquet")),
         planner_export_root=planner_export_root,
         image_modalities=image_modalities,
@@ -165,6 +219,11 @@ def main() -> int:
         episode_uids=val_episodes,
         view_modes=[str(v) for v in cfg["val_view_modes"]],
         local_target_parquet_name=str(cfg["local_target_parquet_name"]),
+        speed_weight_parquet_name=(
+            str(cfg["speed_weight_parquet_name"]) if cfg.get("speed_weight_parquet_name") else None
+        ),
+        sample_weight_column=str(cfg.get("sample_weight_column", "sample_weight")),
+        require_speed_weights=bool(cfg.get("require_speed_weights", False)),
         planner_index_filename=str(cfg.get("planner_index_filename", "planner_vla_rollout_index.parquet")),
         planner_export_root=planner_export_root,
         image_modalities=image_modalities,
@@ -185,6 +244,11 @@ def main() -> int:
         "output_root": str(output_root),
         "local_target_parquet_name": str(cfg["local_target_parquet_name"]),
         "local_target_npz_name": str(cfg["local_target_npz_name"]),
+        "speed_weight_parquet_name": (
+            str(cfg["speed_weight_parquet_name"]) if cfg.get("speed_weight_parquet_name") else None
+        ),
+        "sample_weight_column": str(cfg.get("sample_weight_column", "sample_weight")),
+        "require_speed_weights": bool(cfg.get("require_speed_weights", False)),
         "planner_index_filename": str(cfg.get("planner_index_filename", "planner_vla_rollout_index.parquet")),
         "planner_arrays_filename": str(cfg.get("planner_arrays_filename", "planner_vla_rollout_features.npz")),
         "train_index_name": train_path.name,
@@ -198,6 +262,14 @@ def main() -> int:
             "val_rows": int(len(val_frame)),
             "train_episodes": len(train_episodes),
             "val_episodes": len(val_episodes),
+        },
+        "sample_weight_stats": {
+            "train_mean": (float(train_frame["sample_weight"].mean()) if not train_frame.empty else None),
+            "train_min": (float(train_frame["sample_weight"].min()) if not train_frame.empty else None),
+            "train_max": (float(train_frame["sample_weight"].max()) if not train_frame.empty else None),
+            "val_mean": (float(val_frame["sample_weight"].mean()) if not val_frame.empty else None),
+            "val_min": (float(val_frame["sample_weight"].min()) if not val_frame.empty else None),
+            "val_max": (float(val_frame["sample_weight"].max()) if not val_frame.empty else None),
         },
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

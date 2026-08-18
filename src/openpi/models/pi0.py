@@ -438,7 +438,21 @@ class Pi0(_model.BaseModel):
             action_mask = jnp.ones_like(sq_error, dtype=jnp.float32)
             base_loss = jnp.mean(sq_error, axis=-1)
 
-        base_loss_mean = jnp.mean(base_loss)
+        sample_weight = (
+            observation.sample_weight
+            if self.origami_vla_config.enabled and self.origami_vla_config.use_speed_efficiency_weight
+            else None
+        )
+
+        def reduce_metric(values: at.Array) -> at.Array:
+            return _model.reduce_batch_metric(
+                values,
+                sample_weight,
+                normalize=self.origami_vla_config.normalize_speed_efficiency_weighted_loss,
+                eps=self.origami_vla_config.speed_efficiency_weight_eps,
+            )
+
+        base_loss_mean = reduce_metric(base_loss)
         if not self.origami_vla_config.enabled:
             return base_loss, {
                 "loss": base_loss_mean,
@@ -482,12 +496,12 @@ class Pi0(_model.BaseModel):
         )
         total_loss = base_loss + aux_loss[:, None]
 
-        curve_raw = jnp.mean(aux_terms["curve"])
-        start_raw = jnp.mean(aux_terms["start"])
-        end_raw = jnp.mean(aux_terms["end"])
-        width_raw = jnp.mean(aux_terms["width"])
-        aux_total = jnp.mean(aux_loss)
-        total_mean = jnp.mean(total_loss)
+        curve_raw = reduce_metric(aux_terms["curve"])
+        start_raw = reduce_metric(aux_terms["start"])
+        end_raw = reduce_metric(aux_terms["end"])
+        width_raw = reduce_metric(aux_terms["width"])
+        aux_total = reduce_metric(aux_loss)
+        total_mean = reduce_metric(total_loss)
 
         return total_loss, {
             "loss": total_mean,
