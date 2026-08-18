@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -8,16 +9,22 @@ import jax.numpy as jnp
 
 @dataclasses.dataclass(frozen=True)
 class ActionNormStats:
-    mean: jax.Array
-    std: jax.Array
-    q01: jax.Array | None = None
-    q99: jax.Array | None = None
+    mean: Any
+    std: Any
+    q01: Any | None = None
+    q99: Any | None = None
 
 
 @dataclasses.dataclass(frozen=True)
 class PackedActionNormStats:
     control_points: ActionNormStats
     span_widths: ActionNormStats
+
+
+def _as_jax_array(value: Any, *, dtype: jnp.dtype | None = None) -> jax.Array:
+    if dtype is None:
+        return jnp.asarray(value)
+    return jnp.asarray(value, dtype=dtype)
 
 
 def denormalize_actions(
@@ -28,11 +35,15 @@ def denormalize_actions(
 ) -> jax.Array:
     if stats is None:
         return actions
+    mean = _as_jax_array(stats.mean, dtype=actions.dtype)
+    std = _as_jax_array(stats.std, dtype=actions.dtype)
     if use_quantiles:
         if stats.q01 is None or stats.q99 is None:
             raise ValueError("Quantile action denormalization requested, but q01/q99 are missing.")
-        return (actions + 1.0) * 0.5 * (stats.q99 + 1e-6 - stats.q01) + stats.q01
-    return actions * (stats.std + 1e-6) + stats.mean
+        q01 = _as_jax_array(stats.q01, dtype=actions.dtype)
+        q99 = _as_jax_array(stats.q99, dtype=actions.dtype)
+        return (actions + 1.0) * 0.5 * (q99 + 1e-6 - q01) + q01
+    return actions * (std + 1e-6) + mean
 
 
 def denormalize_packed_actions(

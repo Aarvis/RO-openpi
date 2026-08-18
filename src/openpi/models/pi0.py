@@ -108,11 +108,18 @@ def _load_origami_action_stats(
         )
 
     def _convert(stats: _normalize.NormStats) -> _origami_spline_losses.ActionNormStats:
+        def _freeze(values: np.ndarray | None) -> tuple[float, ...] | None:
+            if values is None:
+                return None
+            return tuple(np.asarray(values, dtype=np.float32).reshape(-1).tolist())
+
         return _origami_spline_losses.ActionNormStats(
-            mean=jnp.asarray(np.asarray(stats.mean), dtype=jnp.float32),
-            std=jnp.asarray(np.asarray(stats.std), dtype=jnp.float32),
-            q01=None if stats.q01 is None else jnp.asarray(np.asarray(stats.q01), dtype=jnp.float32),
-            q99=None if stats.q99 is None else jnp.asarray(np.asarray(stats.q99), dtype=jnp.float32),
+            # Keep these as immutable host-side constants. Static JAX arrays traced during
+            # jitted model init can leak out through NNX graph metadata.
+            mean=_freeze(stats.mean),
+            std=_freeze(stats.std),
+            q01=_freeze(stats.q01),
+            q99=_freeze(stats.q99),
         )
 
     return _origami_spline_losses.PackedActionNormStats(
