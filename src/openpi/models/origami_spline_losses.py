@@ -14,6 +14,12 @@ class ActionNormStats:
     q99: jax.Array | None = None
 
 
+@dataclasses.dataclass(frozen=True)
+class PackedActionNormStats:
+    control_points: ActionNormStats
+    span_widths: ActionNormStats
+
+
 def denormalize_actions(
     actions: jax.Array,
     *,
@@ -27,6 +33,32 @@ def denormalize_actions(
             raise ValueError("Quantile action denormalization requested, but q01/q99 are missing.")
         return (actions + 1.0) * 0.5 * (stats.q99 + 1e-6 - stats.q01) + stats.q01
     return actions * (stats.std + 1e-6) + stats.mean
+
+
+def denormalize_packed_actions(
+    actions: jax.Array,
+    *,
+    stats: PackedActionNormStats | None,
+    use_quantiles: bool,
+    max_control_points: int,
+    max_span_count: int,
+) -> jax.Array:
+    if stats is None:
+        return actions
+    denormalized = actions
+    control_points = denormalize_actions(
+        actions[:, :max_control_points, :],
+        stats=stats.control_points,
+        use_quantiles=use_quantiles,
+    )
+    span_widths = denormalize_actions(
+        actions[:, max_control_points, :max_span_count],
+        stats=stats.span_widths,
+        use_quantiles=use_quantiles,
+    )
+    denormalized = denormalized.at[:, :max_control_points, :].set(control_points)
+    denormalized = denormalized.at[:, max_control_points, :max_span_count].set(span_widths)
+    return denormalized
 
 
 def _smooth_l1(diff: jax.Array, beta: float) -> jax.Array:
@@ -141,7 +173,7 @@ def compute_auxiliary_losses(
     target_actions_norm: jax.Array,
     action_mask: jax.Array,
     *,
-    stats: ActionNormStats | None,
+    stats: PackedActionNormStats | None,
     use_quantiles: bool,
     degree: int,
     max_control_points: int,
@@ -163,8 +195,20 @@ def compute_auxiliary_losses(
             "width": zeros,
         }
 
-    pred_actions = denormalize_actions(pred_actions_norm, stats=stats, use_quantiles=use_quantiles)
-    target_actions = denormalize_actions(target_actions_norm, stats=stats, use_quantiles=use_quantiles)
+    pred_actions = denormalize_packed_actions(
+        pred_actions_norm,
+        stats=stats,
+        use_quantiles=use_quantiles,
+        max_control_points=max_control_points,
+        max_span_count=max_span_count,
+    )
+    target_actions = denormalize_packed_actions(
+        target_actions_norm,
+        stats=stats,
+        use_quantiles=use_quantiles,
+        max_control_points=max_control_points,
+        max_span_count=max_span_count,
+    )
 
     control_mask = jnp.asarray(action_mask[:, :max_control_points, :], dtype=jnp.bool_)
     span_mask = jnp.asarray(action_mask[:, max_control_points, :max_span_count], dtype=jnp.bool_)

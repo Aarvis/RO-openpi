@@ -225,6 +225,17 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             )
         norm_stats = data_config.norm_stats
 
+    normalize_transform = _transforms.make_normalize_transform(
+        norm_stats,
+        use_quantiles=data_config.use_quantile_norm,
+        origami_max_control_points=(
+            data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
+        ),
+        origami_max_span_count=(
+            data_config.origami_vla.max_span_count if data_config.origami_vla is not None else None
+        ),
+    )
+
     transforms = _make_sidecar_transforms(data_config)
 
     return TransformedDataset(
@@ -233,7 +244,7 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             *transforms,
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            normalize_transform,
             *data_config.model_transforms.inputs,
         ],
     )
@@ -256,13 +267,24 @@ def transform_iterable_dataset(
             )
         norm_stats = data_config.norm_stats
 
+    normalize_transform = _transforms.make_normalize_transform(
+        norm_stats,
+        use_quantiles=data_config.use_quantile_norm,
+        origami_max_control_points=(
+            data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
+        ),
+        origami_max_span_count=(
+            data_config.origami_vla.max_span_count if data_config.origami_vla is not None else None
+        ),
+    )
+
     return IterableTransformedDataset(
         dataset,
         [
             *_make_sidecar_transforms(data_config),
             *data_config.repack_transforms.inputs,
             *data_config.data_transforms.inputs,
-            _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            normalize_transform,
             *data_config.model_transforms.inputs,
         ],
         is_batched=is_batched,

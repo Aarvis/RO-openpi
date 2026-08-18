@@ -89,7 +89,7 @@ class FutureLatentPolicyAdapter(nnx.Module):
 
 def _load_origami_action_stats(
     stats_dir: str | None,
-) -> _origami_spline_losses.ActionNormStats | None:
+) -> _origami_spline_losses.PackedActionNormStats | None:
     if not stats_dir:
         return None
     try:
@@ -99,14 +99,25 @@ def _load_origami_action_stats(
             f"Origami VLA action normalization stats were not found under {stats_dir}. "
             "Run scripts/compute_origami_vla_norm_stats.py before training."
         ) from exc
-    if "actions" not in loaded:
-        raise KeyError(f"Expected 'actions' normalization stats under {stats_dir}")
-    stats = loaded["actions"]
-    return _origami_spline_losses.ActionNormStats(
-        mean=jnp.asarray(np.asarray(stats.mean), dtype=jnp.float32),
-        std=jnp.asarray(np.asarray(stats.std), dtype=jnp.float32),
-        q01=None if stats.q01 is None else jnp.asarray(np.asarray(stats.q01), dtype=jnp.float32),
-        q99=None if stats.q99 is None else jnp.asarray(np.asarray(stats.q99), dtype=jnp.float32),
+    required_keys = ("actions_control_points", "actions_span_widths")
+    missing = [key for key in required_keys if key not in loaded]
+    if missing:
+        raise KeyError(
+            f"Missing Origami packed-action normalization stats {missing} under {stats_dir}. "
+            "Re-run scripts/compute_origami_vla_norm_stats.py to generate separate control-point and span stats."
+        )
+
+    def _convert(stats: _normalize.NormStats) -> _origami_spline_losses.ActionNormStats:
+        return _origami_spline_losses.ActionNormStats(
+            mean=jnp.asarray(np.asarray(stats.mean), dtype=jnp.float32),
+            std=jnp.asarray(np.asarray(stats.std), dtype=jnp.float32),
+            q01=None if stats.q01 is None else jnp.asarray(np.asarray(stats.q01), dtype=jnp.float32),
+            q99=None if stats.q99 is None else jnp.asarray(np.asarray(stats.q99), dtype=jnp.float32),
+        )
+
+    return _origami_spline_losses.PackedActionNormStats(
+        control_points=_convert(loaded["actions_control_points"]),
+        span_widths=_convert(loaded["actions_span_widths"]),
     )
 
 

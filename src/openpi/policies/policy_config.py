@@ -138,18 +138,39 @@ def create_trained_policy(
             device=pytorch_device,
         )
 
+    normalize_transform = transforms.make_normalize_transform(
+        norm_stats,
+        use_quantiles=data_config.use_quantile_norm,
+        origami_max_control_points=(
+            data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
+        ),
+        origami_max_span_count=(
+            data_config.origami_vla.max_span_count if data_config.origami_vla is not None else None
+        ),
+    )
+    unnormalize_transform = transforms.make_unnormalize_transform(
+        norm_stats,
+        use_quantiles=data_config.use_quantile_norm,
+        origami_max_control_points=(
+            data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
+        ),
+        origami_max_span_count=(
+            data_config.origami_vla.max_span_count if data_config.origami_vla is not None else None
+        ),
+    )
+
     return _policy.Policy(
         model,
         transforms=[
             *repack_transforms.inputs,
             transforms.InjectDefaultPrompt(default_prompt),
             *data_config.data_transforms.inputs,
-            transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            normalize_transform,
             *data_config.model_transforms.inputs,
         ],
         output_transforms=[
             *data_config.model_transforms.outputs,
-            transforms.Unnormalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
+            unnormalize_transform,
             *data_config.data_transforms.outputs,
             *repack_transforms.outputs,
         ],

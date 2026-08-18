@@ -192,6 +192,182 @@ class Unnormalize(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class OrigamiSplineNormalize(DataTransformFn):
+    """Normalize Origami VLA packed spline actions with separate control-point and span stats."""
+
+    state_stats: NormStats | None
+    control_point_stats: NormStats | None
+    span_width_stats: NormStats | None
+    max_control_points: int
+    max_span_count: int
+    use_quantiles: bool = False
+    strict: bool = False
+
+    def __post_init__(self):
+        if self.use_quantiles:
+            for name, stats in (
+                ("state", self.state_stats),
+                ("actions_control_points", self.control_point_stats),
+                ("actions_span_widths", self.span_width_stats),
+            ):
+                if stats is None:
+                    continue
+                if stats.q01 is None or stats.q99 is None:
+                    raise ValueError(f"Quantile stats required for {name} when use_quantiles=True.")
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "state" in data:
+            if self.state_stats is None:
+                if self.strict:
+                    raise ValueError("OrigamiSplineNormalize expected state stats but none were provided.")
+            else:
+                data["state"] = self._apply(np.asarray(data["state"]), self.state_stats)
+        elif self.strict and self.state_stats is not None:
+            raise ValueError("OrigamiSplineNormalize expected a 'state' key in the data.")
+
+        if "actions" in data:
+            if self.control_point_stats is None or self.span_width_stats is None:
+                if self.strict:
+                    raise ValueError(
+                        "OrigamiSplineNormalize expected both control-point and span-width stats for packed actions."
+                    )
+                return data
+            data["actions"] = self._normalize_actions(np.asarray(data["actions"]))
+        elif self.strict and (self.control_point_stats is not None or self.span_width_stats is not None):
+            raise ValueError("OrigamiSplineNormalize expected an 'actions' key in the data.")
+        return data
+
+    def _apply(self, x: np.ndarray, stats: NormStats) -> np.ndarray:
+        if self.use_quantiles:
+            assert stats.q01 is not None
+            assert stats.q99 is not None
+            q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+            return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+        mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
+        return (x - mean) / (std + 1e-6)
+
+    def _normalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        normalized = np.array(actions, copy=True)
+        normalized[..., : self.max_control_points, :] = self._apply(
+            normalized[..., : self.max_control_points, :],
+            self.control_point_stats,
+        )
+        if normalized.shape[-2] <= self.max_control_points:
+            raise ValueError(
+                f"Packed Origami actions must have at least {self.max_control_points + 1} rows, "
+                f"got shape {normalized.shape}."
+            )
+        normalized[..., self.max_control_points, : self.max_span_count] = self._apply(
+            normalized[..., self.max_control_points, : self.max_span_count],
+            self.span_width_stats,
+        )
+        return normalized
+
+
+@dataclasses.dataclass(frozen=True)
+class OrigamiSplineUnnormalize(DataTransformFn):
+    """Inverse of OrigamiSplineNormalize for packed spline actions."""
+
+    state_stats: NormStats | None
+    control_point_stats: NormStats | None
+    span_width_stats: NormStats | None
+    max_control_points: int
+    max_span_count: int
+    use_quantiles: bool = False
+
+    def __post_init__(self):
+        if self.use_quantiles:
+            for name, stats in (
+                ("state", self.state_stats),
+                ("actions_control_points", self.control_point_stats),
+                ("actions_span_widths", self.span_width_stats),
+            ):
+                if stats is None:
+                    continue
+                if stats.q01 is None or stats.q99 is None:
+                    raise ValueError(f"Quantile stats required for {name} when use_quantiles=True.")
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "state" in data and self.state_stats is not None:
+            data["state"] = self._apply(np.asarray(data["state"]), self.state_stats)
+        if "actions" in data and self.control_point_stats is not None and self.span_width_stats is not None:
+            data["actions"] = self._unnormalize_actions(np.asarray(data["actions"]))
+        return data
+
+    def _apply(self, x: np.ndarray, stats: NormStats) -> np.ndarray:
+        if self.use_quantiles:
+            assert stats.q01 is not None
+            assert stats.q99 is not None
+            q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+            return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
+        mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
+        return x * (std + 1e-6) + mean
+
+    def _unnormalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        unnormalized = np.array(actions, copy=True)
+        unnormalized[..., : self.max_control_points, :] = self._apply(
+            unnormalized[..., : self.max_control_points, :],
+            self.control_point_stats,
+        )
+        if unnormalized.shape[-2] <= self.max_control_points:
+            raise ValueError(
+                f"Packed Origami actions must have at least {self.max_control_points + 1} rows, "
+                f"got shape {unnormalized.shape}."
+            )
+        unnormalized[..., self.max_control_points, : self.max_span_count] = self._apply(
+            unnormalized[..., self.max_control_points, : self.max_span_count],
+            self.span_width_stats,
+        )
+        return unnormalized
+
+
+def make_normalize_transform(
+    norm_stats: at.PyTree[NormStats] | None,
+    *,
+    use_quantiles: bool = False,
+    strict: bool = False,
+    origami_max_control_points: int | None = None,
+    origami_max_span_count: int | None = None,
+) -> DataTransformFn:
+    if origami_max_control_points is not None or origami_max_span_count is not None:
+        if origami_max_control_points is None or origami_max_span_count is None:
+            raise ValueError("Both origami_max_control_points and origami_max_span_count must be provided together.")
+        stats_dict = norm_stats or {}
+        return OrigamiSplineNormalize(
+            state_stats=stats_dict.get("state"),
+            control_point_stats=stats_dict.get("actions_control_points"),
+            span_width_stats=stats_dict.get("actions_span_widths"),
+            max_control_points=origami_max_control_points,
+            max_span_count=origami_max_span_count,
+            use_quantiles=use_quantiles,
+            strict=strict,
+        )
+    return Normalize(norm_stats, use_quantiles=use_quantiles, strict=strict)
+
+
+def make_unnormalize_transform(
+    norm_stats: at.PyTree[NormStats] | None,
+    *,
+    use_quantiles: bool = False,
+    origami_max_control_points: int | None = None,
+    origami_max_span_count: int | None = None,
+) -> DataTransformFn:
+    if origami_max_control_points is not None or origami_max_span_count is not None:
+        if origami_max_control_points is None or origami_max_span_count is None:
+            raise ValueError("Both origami_max_control_points and origami_max_span_count must be provided together.")
+        stats_dict = norm_stats or {}
+        return OrigamiSplineUnnormalize(
+            state_stats=stats_dict.get("state"),
+            control_point_stats=stats_dict.get("actions_control_points"),
+            span_width_stats=stats_dict.get("actions_span_widths"),
+            max_control_points=origami_max_control_points,
+            max_span_count=origami_max_span_count,
+            use_quantiles=use_quantiles,
+        )
+    return Unnormalize(norm_stats, use_quantiles=use_quantiles)
+
+
+@dataclasses.dataclass(frozen=True)
 class ResizeImages(DataTransformFn):
     height: int
     width: int

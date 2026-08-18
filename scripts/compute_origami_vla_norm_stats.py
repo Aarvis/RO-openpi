@@ -55,7 +55,8 @@ def main() -> int:
 
     train_rows = _origami_vla_dataset.load_manifest_rows(settings, "train")
     state_stats = _normalize.RunningStats()
-    action_stats = _normalize.RunningStats()
+    control_point_stats = _normalize.RunningStats()
+    span_width_stats = _normalize.RunningStats()
 
     dataset_root = Path(settings.dataset_root)
     grouped_rows = defaultdict(list)
@@ -115,7 +116,14 @@ def main() -> int:
                 actions_chunk[sample_offset] = actions
                 action_mask_chunk[sample_offset] = action_mask
 
-            action_stats.update(actions_chunk, mask=action_mask_chunk)
+            control_point_stats.update(
+                actions_chunk[:, : settings.max_control_points, :],
+                mask=action_mask_chunk[:, : settings.max_control_points, :],
+            )
+            span_width_stats.update(
+                actions_chunk[:, settings.max_control_points, : settings.max_span_count],
+                mask=action_mask_chunk[:, settings.max_control_points, : settings.max_span_count],
+            )
             row_progress.update(len(chunk_rows))
             row_progress.set_postfix(
                 episode=f"{episode_idx}/{total_episodes}",
@@ -126,7 +134,8 @@ def main() -> int:
 
     norm_stats = {
         "state": state_stats.get_statistics(),
-        "actions": action_stats.get_statistics(),
+        "actions_control_points": control_point_stats.get_statistics(),
+        "actions_span_widths": span_width_stats.get_statistics(),
     }
     asset_id = data_config.asset_id or data_config.repo_id
     if asset_id is None:
