@@ -75,6 +75,10 @@ def main() -> int:
         episode_root = dataset_root / "episodes" / episode_uid
         state = np.load(episode_root / "arrays" / "state_65d.npy", mmap_mode="r")
         archive = np.load(episode_root / "arrays" / settings.local_target_npz_name, allow_pickle=False)
+        sample_offsets = np.asarray(archive["control_point_offsets"], dtype=np.int64)
+        knot_offsets = np.asarray(archive["local_knot_offsets"], dtype=np.int64)
+        control_points_all = np.asarray(archive["local_delta_control_points"], dtype=np.float32)
+        local_knots_all = np.asarray(archive["local_knots"], dtype=np.float32)
         episode_rows = grouped_rows[episode_uid]
         for chunk_start in range(0, len(episode_rows), args.chunk_size):
             chunk_rows = episode_rows[chunk_start : chunk_start + args.chunk_size]
@@ -90,7 +94,16 @@ def main() -> int:
 
             for sample_offset, row in enumerate(chunk_rows):
                 sample_index = int(row["local_target_npz_sample_index"])
-                control_points, local_knots = _origami_vla_dataset.extract_target_sample(archive, sample_index)
+                cp_start = int(sample_offsets[sample_index])
+                cp_end = int(sample_offsets[sample_index + 1])
+                knot_start = int(knot_offsets[sample_index])
+                knot_end = int(knot_offsets[sample_index + 1])
+                if cp_end <= cp_start:
+                    raise ValueError(f"Empty control-point slice for sample_index={sample_index} in {episode_uid}")
+                if knot_end <= knot_start:
+                    raise ValueError(f"Empty knot slice for sample_index={sample_index} in {episode_uid}")
+                control_points = control_points_all[cp_start:cp_end]
+                local_knots = local_knots_all[knot_start:knot_end]
                 span_widths = _origami_vla_dataset.local_knots_to_span_widths(local_knots, settings.degree)
                 actions, action_mask = _origami_vla_dataset.pack_spline_actions(
                     control_points,
