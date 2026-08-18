@@ -91,6 +91,9 @@ class RobotSplineConfig:
 @dataclasses.dataclass(frozen=True)
 class OrigamiVlaConfig:
     enabled: bool = False
+    # User-facing switch: when enabled, the VLA loss uses per-sample speed-efficiency
+    # weights so faster semantic checkpoint executions contribute more strongly.
+    episode_execution_speed_preference: bool = False
     belief_dim: int = 39
     history_dim: int = 512
     planner_belief_hidden_dims: tuple[int, ...] = (256, 512)
@@ -111,6 +114,8 @@ class OrigamiVlaConfig:
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
     disable_auxiliary_losses: bool = False
+    # Internal loss-weighting toggle. Keep this enabled and drive behavior with
+    # episode_execution_speed_preference unless you need lower-level debugging.
     use_speed_efficiency_weight: bool = True
     normalize_speed_efficiency_weighted_loss: bool = True
     speed_efficiency_weight_eps: float = 1.0e-6

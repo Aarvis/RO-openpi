@@ -440,7 +440,11 @@ class Pi0(_model.BaseModel):
 
         sample_weight = (
             observation.sample_weight
-            if self.origami_vla_config.enabled and self.origami_vla_config.use_speed_efficiency_weight
+            if (
+                self.origami_vla_config.enabled
+                and self.origami_vla_config.episode_execution_speed_preference
+                and self.origami_vla_config.use_speed_efficiency_weight
+            )
             else None
         )
 

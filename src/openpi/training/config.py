@@ -2286,6 +2286,7 @@ _CONFIGS = [
             image_keys=("ooi_rgb", "base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"),
             origami_vla=pi0_config.OrigamiVlaConfig(
                 enabled=True,
+                episode_execution_speed_preference=True,
                 belief_dim=39,
                 history_dim=512,
                 planner_belief_hidden_dims=(256, 512),
