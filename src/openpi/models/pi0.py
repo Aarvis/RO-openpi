@@ -445,6 +445,22 @@ class Pi0(_model.BaseModel):
                 "loss_total": base_loss_mean,
                 "loss_base_flow": base_loss_mean,
             }
+        if self.origami_vla_config.disable_auxiliary_losses:
+            zero = jnp.asarray(0.0, dtype=base_loss.dtype)
+            return base_loss, {
+                "loss": base_loss_mean,
+                "loss_total": base_loss_mean,
+                "loss_base_flow": base_loss_mean,
+                "loss_aux_total": zero,
+                "loss_curve_raw": zero,
+                "loss_start_raw": zero,
+                "loss_end_raw": zero,
+                "loss_width_raw": zero,
+                "loss_curve_weighted": zero,
+                "loss_start_weighted": zero,
+                "loss_end_weighted": zero,
+                "loss_width_weighted": zero,
+            }
 
         pred_actions_for_aux = x_t - time_expanded * v_t
         aux_loss, aux_terms = _origami_spline_losses.compute_auxiliary_losses(

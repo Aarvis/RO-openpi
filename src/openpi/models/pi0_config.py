@@ -110,6 +110,7 @@ class OrigamiVlaConfig:
     width_min: float = 1e-4
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
+    disable_auxiliary_losses: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
