@@ -2321,6 +2321,8 @@ _CONFIGS = [
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
+        non_adapter_lr_multiplier=0.5,
+        adapter_param_regex=".*(origami_planner_adapter|action_in_proj|action_out_proj).*",
         batch_size=32,
         num_workers=8,
         num_train_steps=60_000,

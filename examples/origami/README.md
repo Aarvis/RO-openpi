@@ -82,6 +82,11 @@ Useful overrides:
 --assets-base-dir ./assets
 ```
 
+By default, this Origami config uses a two-group LR setup:
+
+- `origami_planner_adapter`, `action_in_proj`, and `action_out_proj` train at the full scheduled LR
+- the pretrained pi0.5 backbone trains at `0.5x` of that LR
+
 ## Notes
 
 - This implementation currently targets the native JAX `scripts/train.py` path.
