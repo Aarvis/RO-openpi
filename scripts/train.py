@@ -383,6 +383,7 @@ def main(config: _config.TrainConfig):
                 _checkpoints.save_latest_val_state(
                     latest_val_checkpoint_manager,
                     config.latest_val_checkpoint_dir,
+                    config,
                     train_state,
                     data_loader,
                     completed_step,
@@ -393,6 +394,7 @@ def main(config: _config.TrainConfig):
                 _checkpoints.save_best_state(
                     checkpoint_manager,
                     config.best_checkpoint_dir,
+                    config,
                     train_state,
                     data_loader,
                     completed_step,
@@ -403,7 +405,7 @@ def main(config: _config.TrainConfig):
                 wandb.log({"val/best_loss": val_loss, "val/best_step": completed_step}, step=completed_step)
 
         if completed_step > start_step and _should_save_checkpoint(config, completed_step):
-            _checkpoints.save_state(checkpoint_manager, train_state, data_loader, completed_step)
+            _checkpoints.save_state(checkpoint_manager, config, train_state, data_loader, completed_step)
 
     logging.info("Waiting for checkpoint manager to finish")
     checkpoint_manager.wait_until_finished()

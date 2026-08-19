@@ -7,6 +7,7 @@ from typing import Any
 import jax.numpy as jnp
 
 import openpi.models.model as _model
+import openpi.models.origami_tactile_adapter as _origami_tactile_adapter
 import openpi.models.pi0_config as pi0_config
 from openpi.policies import future_latent_runtime as _future_latent_runtime
 import openpi.policies.policy as _policy
@@ -14,6 +15,50 @@ import openpi.shared.download as download
 from openpi.training import checkpoints as _checkpoints
 from openpi.training import config as _config
 import openpi.transforms as transforms
+
+
+def _maybe_use_checkpoint_origami_stats(
+    train_config: _config.TrainConfig,
+    checkpoint_dir: pathlib.Path,
+    asset_id: str | None,
+) -> _config.TrainConfig:
+    if asset_id is None:
+        return train_config
+    if not isinstance(train_config.model, pi0_config.Pi0Config):
+        return train_config
+    if not train_config.model.origami_vla.enabled:
+        return train_config
+
+    checkpoint_asset_dir = checkpoint_dir / "assets" / asset_id
+    checkpoint_norm_stats = checkpoint_asset_dir / "norm_stats.json"
+    checkpoint_tactile_stats = checkpoint_asset_dir / _origami_tactile_adapter.TACTILE_NORM_STATS_FILENAME
+    origami_config = train_config.model.origami_vla
+
+    if not checkpoint_norm_stats.exists():
+        logging.info(
+            "Checkpoint Origami norm stats not found at %s; falling back to configured asset directory.",
+            checkpoint_norm_stats,
+        )
+        return train_config
+
+    if origami_config.tactile_enabled and not checkpoint_tactile_stats.exists():
+        logging.info(
+            "Checkpoint Origami tactile norm stats not found at %s; falling back to configured asset directory.",
+            checkpoint_tactile_stats,
+        )
+        return train_config
+
+    logging.info("Using Origami normalization stats from checkpoint assets: %s", checkpoint_asset_dir)
+    return dataclasses.replace(
+        train_config,
+        model=dataclasses.replace(
+            train_config.model,
+            origami_vla=dataclasses.replace(
+                origami_config,
+                action_norm_stats_dir=str(checkpoint_asset_dir),
+            ),
+        ),
+    )
 
 
 def create_trained_policy(
@@ -101,6 +146,9 @@ def create_trained_policy(
     # Check if this is a PyTorch model by looking for model.safetensors
     weight_path = os.path.join(checkpoint_dir, "model.safetensors")
     is_pytorch = os.path.exists(weight_path)
+
+    data_config = train_config.data.create(train_config.assets_dirs, train_config.model)
+    train_config = _maybe_use_checkpoint_origami_stats(train_config, pathlib.Path(checkpoint_dir), data_config.asset_id)
 
     logging.info("Loading model...")
     if is_pytorch:

@@ -123,6 +123,7 @@ def _load_origami_action_stats(
             q99=_freeze(stats.q99),
         )
 
+    logger.info("Loaded Origami packed action normalization stats from %s", stats_dir)
     return _origami_spline_losses.PackedActionNormStats(
         control_points=_convert(loaded["actions_control_points"]),
         span_widths=_convert(loaded["actions_span_widths"]),
@@ -141,6 +142,7 @@ def _load_origami_tactile_stats(
             f"Origami tactile normalization stats were not found at {path}. "
             "Run scripts/compute_origami_vla_norm_stats.py before training."
         )
+    logger.info("Loaded Origami tactile normalization stats from %s", path)
     return _origami_tactile_adapter.load_tactile_norm_stats(path)
 
 

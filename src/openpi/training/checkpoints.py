@@ -12,8 +12,12 @@ import jax
 import orbax.checkpoint as ocp
 import orbax.checkpoint.future as future
 
+from openpi.models import pi0_config as _pi0_config
+import openpi.models.origami_tactile_adapter as _origami_tactile_adapter
 from openpi.shared import array_typing as at
+import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
+import openpi.training.config as _config
 import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
 
@@ -155,6 +159,7 @@ def initialize_val_checkpoint_dirs(
 
 def save_state(
     checkpoint_manager: ocp.CheckpointManager,
+    config: _config.TrainConfig,
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int,
@@ -163,8 +168,33 @@ def save_state(
         # Save the normalization stats.
         data_config = data_loader.data_config()
         norm_stats = data_config.norm_stats
-        if norm_stats is not None and data_config.asset_id is not None:
-            _normalize.save(directory / data_config.asset_id, norm_stats)
+        if norm_stats is None or data_config.asset_id is None:
+            return
+
+        asset_dir = directory / data_config.asset_id
+        _normalize.save(asset_dir, norm_stats)
+
+        model_config = config.model
+        if not isinstance(model_config, _pi0_config.Pi0Config):
+            return
+        if not model_config.origami_vla.enabled or not model_config.origami_vla.tactile_enabled:
+            return
+
+        stats_dir = model_config.origami_vla.action_norm_stats_dir
+        if not stats_dir:
+            logging.warning("Origami tactile conditioning is enabled, but action_norm_stats_dir is unset during checkpoint save.")
+            return
+
+        resolved_dir = epath.Path(_download.maybe_download(stats_dir))
+        source_path = resolved_dir / _origami_tactile_adapter.TACTILE_NORM_STATS_FILENAME
+        if not source_path.exists():
+            logging.warning("Origami tactile normalization stats were not found at %s while saving checkpoint assets.", source_path)
+            return
+
+        target_path = asset_dir / _origami_tactile_adapter.TACTILE_NORM_STATS_FILENAME
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(source_path.read_bytes())
+        logging.info("Saved Origami tactile normalization stats to %s", target_path)
 
     # Split params that can be used for inference into a separate item.
     with at.disable_typechecking():
@@ -180,13 +210,14 @@ def save_state(
 def save_best_state(
     checkpoint_manager: ocp.CheckpointManager,
     best_checkpoint_dir: epath.Path | str,
+    config: _config.TrainConfig,
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int,
     val_loss: float,
 ):
     checkpoint_manager.wait_until_finished()
-    save_state(checkpoint_manager, state, data_loader, step)
+    save_state(checkpoint_manager, config, state, data_loader, step)
     checkpoint_manager.wait_until_finished()
     _write_best_checkpoint_info(best_checkpoint_dir, BestCheckpointInfo(step=step, val_loss=val_loss))
 
@@ -194,13 +225,14 @@ def save_best_state(
 def save_latest_val_state(
     checkpoint_manager: ocp.CheckpointManager,
     latest_val_checkpoint_dir: epath.Path | str,
+    config: _config.TrainConfig,
     state: training_utils.TrainState,
     data_loader: _data_loader.DataLoader,
     step: int,
     val_loss: float,
 ):
     checkpoint_manager.wait_until_finished()
-    save_state(checkpoint_manager, state, data_loader, step)
+    save_state(checkpoint_manager, config, state, data_loader, step)
     checkpoint_manager.wait_until_finished()
     _write_best_checkpoint_info(latest_val_checkpoint_dir, BestCheckpointInfo(step=step, val_loss=val_loss))
 
