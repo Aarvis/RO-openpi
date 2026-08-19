@@ -15,12 +15,15 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import openpi.shared.normalize as _normalize
+import openpi.models.origami_tactile_adapter as _origami_tactile_adapter
 import openpi.training.config as _config
 import openpi.training.origami_vla_dataset as _origami_vla_dataset
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compute Origami VLA state/action normalization stats.")
+    parser = argparse.ArgumentParser(
+        description="Compute Origami VLA state/action normalization stats and tactile conditioning stats."
+    )
     parser.add_argument("--config-name", type=str, default="pi05_origami_checkpoint_spline_vla")
     parser.add_argument("--manifest-root", type=Path, default=None, help="Optional manifest root override.")
     parser.add_argument("--dataset-root", type=Path, default=None, help="Optional dataset root override.")
@@ -57,6 +60,12 @@ def main() -> int:
     state_stats = _normalize.RunningStats()
     control_point_stats = _normalize.RunningStats()
     span_width_stats = _normalize.RunningStats()
+    tactile_values = (
+        np.empty((len(train_rows), config.model.origami_vla.tactile_dim), dtype=np.float32)
+        if config.model.origami_vla.tactile_enabled
+        else None
+    )
+    tactile_write_offset = 0
 
     dataset_root = Path(settings.dataset_root)
     grouped_rows = defaultdict(list)
@@ -70,11 +79,23 @@ def main() -> int:
     print(f"  rows        : {total_rows}")
     print(f"  episodes    : {total_episodes}")
     print(f"  chunk_size  : {args.chunk_size}")
+    if tactile_values is not None:
+        print(f"  tactile_dim : {config.model.origami_vla.tactile_dim}")
+        print(
+            "  tactile_q   : "
+            f"{config.model.origami_vla.tactile_quantile_low:.4f} .. "
+            f"{config.model.origami_vla.tactile_quantile_high:.4f}"
+        )
 
     row_progress = tqdm(total=total_rows, desc="Norm stats", unit="row", dynamic_ncols=True)
     for episode_idx, episode_uid in enumerate(sorted(grouped_rows), start=1):
         episode_root = dataset_root / "episodes" / episode_uid
         state = np.load(episode_root / "arrays" / "state_65d.npy", mmap_mode="r")
+        tactile = (
+            np.load(episode_root / "arrays" / settings.tactile_filename, mmap_mode="r")
+            if tactile_values is not None
+            else None
+        )
         archive = np.load(episode_root / "arrays" / settings.local_target_npz_name, allow_pickle=False)
         sample_offsets = np.asarray(archive["control_point_offsets"], dtype=np.int64)
         knot_offsets = np.asarray(archive["local_knot_offsets"], dtype=np.int64)
@@ -86,6 +107,15 @@ def main() -> int:
             frame_positions = np.asarray([int(row["frame_position"]) for row in chunk_rows], dtype=np.int64)
             state_chunk = np.asarray(state[frame_positions], dtype=np.float32)
             state_stats.update(state_chunk)
+            if tactile_values is not None and tactile is not None:
+                tactile_chunk = np.asarray(tactile[frame_positions], dtype=np.float32)
+                if tactile_chunk.ndim != 2 or tactile_chunk.shape[-1] != config.model.origami_vla.tactile_dim:
+                    raise ValueError(
+                        f"Expected tactile chunk shape [N, {config.model.origami_vla.tactile_dim}], "
+                        f"got {tactile_chunk.shape} in {episode_uid}"
+                    )
+                tactile_values[tactile_write_offset : tactile_write_offset + tactile_chunk.shape[0]] = tactile_chunk
+                tactile_write_offset += tactile_chunk.shape[0]
 
             actions_chunk = np.zeros(
                 (len(chunk_rows), settings.max_control_points + 1, settings.action_dim),
@@ -142,7 +172,35 @@ def main() -> int:
         raise RuntimeError("Could not resolve asset_id for writing norm stats.")
     output_dir = config.assets_dirs / str(asset_id)
     _normalize.save(output_dir, norm_stats)
+    tactile_stats_path = None
+    if tactile_values is not None:
+        if tactile_write_offset != total_rows:
+            raise RuntimeError(
+                f"Tactile row count mismatch: buffered {tactile_write_offset} rows for {total_rows} manifest rows."
+            )
+        tactile_values = tactile_values[:tactile_write_offset]
+        q_low_value = float(config.model.origami_vla.tactile_quantile_low)
+        q_high_value = float(config.model.origami_vla.tactile_quantile_high)
+        q_low = np.quantile(tactile_values, q_low_value, axis=0).astype(np.float32)
+        q_high = np.quantile(tactile_values, q_high_value, axis=0).astype(np.float32)
+        center = ((q_low + q_high) * 0.5).astype(np.float32)
+        scale = np.maximum(
+            ((q_high - q_low) * 0.5).astype(np.float32),
+            np.asarray(config.model.origami_vla.tactile_min_scale, dtype=np.float32),
+        )
+        tactile_stats = _origami_tactile_adapter.OrigamiTactileNormStats(
+            center=tuple(center.tolist()),
+            scale=tuple(scale.tolist()),
+            quantile_low=tuple(q_low.tolist()),
+            quantile_high=tuple(q_high.tolist()),
+            quantile_low_value=q_low_value,
+            quantile_high_value=q_high_value,
+            min_scale=float(config.model.origami_vla.tactile_min_scale),
+        )
+        tactile_stats_path = _origami_tactile_adapter.save_tactile_norm_stats(output_dir, tactile_stats)
     print(f"  output_dir  : {output_dir}")
+    if tactile_stats_path is not None:
+        print(f"  tactile_out : {tactile_stats_path}")
     return 0
 
 

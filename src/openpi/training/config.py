@@ -280,8 +280,11 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
     planner_arrays_filename: str = "planner_vla_rollout_features.npz"
     planner_index_filename: str = "planner_vla_rollout_index.parquet"
+    tactile_filename: str = "tactile_60d.npy"
     sample_weight_column: str = "sample_weight"
     require_sample_weight: bool = False
+    image_source_type: Literal["video", "frame_cache"] = "video"
+    frame_cache_root_relpath: str = "arrays/vla_frame_cache_224_uint8"
     fail_on_missing_modalities: bool = True
     max_rows: int | None = None
     image_modalities: dict[str, str] = dataclasses.field(
@@ -290,6 +293,14 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             "base_0_rgb": "videos/head_left.mp4",
             "left_wrist_0_rgb": "videos/wrist_left.mp4",
             "right_wrist_0_rgb": "videos/wrist_right.mp4",
+        }
+    )
+    frame_cache_modalities: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "ooi_rgb": "ooi_rgb_224x224_uint8.npy",
+            "base_0_rgb": "base_0_rgb_224x224_uint8.npy",
+            "left_wrist_0_rgb": "left_wrist_0_rgb_224x224_uint8.npy",
+            "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
         }
     )
     model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
@@ -307,15 +318,20 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             local_target_npz_name=self.local_target_npz_name,
             planner_arrays_filename=self.planner_arrays_filename,
             planner_index_filename=self.planner_index_filename,
+            tactile_filename=self.tactile_filename,
             max_control_points=model_config.origami_vla.max_control_points,
             max_span_count=model_config.origami_vla.max_span_count,
             degree=model_config.origami_vla.degree,
             state_dim=int(model_config.state_dim or model_config.action_dim),
             action_dim=model_config.action_dim,
+            tactile_dim=model_config.origami_vla.tactile_dim,
             prompt=self.prompt,
             sample_weight_column=self.sample_weight_column,
             require_sample_weight=self.require_sample_weight,
+            image_source_type=self.image_source_type,
             image_modalities=dict(self.image_modalities),
+            frame_cache_root_relpath=self.frame_cache_root_relpath,
+            frame_cache_modalities=dict(self.frame_cache_modalities),
             fail_on_missing_modalities=self.fail_on_missing_modalities,
             max_rows=self.max_rows,
         )
@@ -2305,6 +2321,20 @@ _CONFIGS = [
                 width_loss_weight=0.05,
                 width_min=1e-4,
                 use_quantile_norm=True,
+                tactile_enabled=True,
+                tactile_dim=60,
+                tactile_finger_count=10,
+                tactile_channels_per_finger=6,
+                tactile_token_dim=256,
+                tactile_finger_hidden_dims=(64, 128),
+                tactile_transformer_layers=2,
+                tactile_attention_heads=4,
+                tactile_ffn_dim=512,
+                tactile_use_type_embeddings=True,
+                tactile_quantile_low=0.005,
+                tactile_quantile_high=0.995,
+                tactile_min_scale=1.0e-6,
+                tactile_soft_clip_scale=5.0,
                 use_speed_efficiency_weight=True,
                 normalize_speed_efficiency_weighted_loss=True,
                 speed_efficiency_weight_eps=1.0e-6,
@@ -2316,12 +2346,21 @@ _CONFIGS = [
             dataset_root="D:/Sampled_Reprocessed_Dataset",
             manifest_root="D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1",
             prompt="fold paper into airplane",
+            tactile_filename="tactile_60d.npy",
             sample_weight_column="sample_weight",
             require_sample_weight=True,
+            image_source_type="frame_cache",
+            frame_cache_root_relpath="arrays/vla_frame_cache_224_uint8",
+            frame_cache_modalities={
+                "ooi_rgb": "ooi_rgb_224x224_uint8.npy",
+                "base_0_rgb": "base_0_rgb_224x224_uint8.npy",
+                "left_wrist_0_rgb": "left_wrist_0_rgb_224x224_uint8.npy",
+                "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
+            },
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "gs://openpi-assets/checkpoints/pi05_base/params",
-            missing_regex=".*(lora|origami_planner_adapter|action_in_proj|action_out_proj).*",
+            missing_regex=".*(lora|origami_planner_adapter|origami_tactile_adapter|action_in_proj|action_out_proj).*",
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
@@ -2332,7 +2371,7 @@ _CONFIGS = [
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
         non_adapter_lr_multiplier=0.5,
-        adapter_param_regex=".*(origami_planner_adapter|action_in_proj|action_out_proj).*",
+        adapter_param_regex=".*(origami_planner_adapter|origami_tactile_adapter|action_in_proj|action_out_proj).*",
         batch_size=32,
         num_workers=8,
         num_train_steps=60_000,

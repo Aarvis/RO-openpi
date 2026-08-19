@@ -114,6 +114,20 @@ class OrigamiVlaConfig:
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
     disable_auxiliary_losses: bool = False
+    tactile_enabled: bool = False
+    tactile_dim: int = 60
+    tactile_finger_count: int = 10
+    tactile_channels_per_finger: int = 6
+    tactile_token_dim: int = 256
+    tactile_finger_hidden_dims: tuple[int, ...] = (64, 128)
+    tactile_transformer_layers: int = 2
+    tactile_attention_heads: int = 4
+    tactile_ffn_dim: int = 512
+    tactile_use_type_embeddings: bool = True
+    tactile_quantile_low: float = 0.005
+    tactile_quantile_high: float = 0.995
+    tactile_min_scale: float = 1.0e-6
+    tactile_soft_clip_scale: float = 5.0
     # Internal loss-weighting toggle. Keep this enabled and drive behavior with
     # episode_execution_speed_preference unless you need lower-level debugging.
     use_speed_efficiency_weight: bool = True
@@ -123,6 +137,22 @@ class OrigamiVlaConfig:
     def __post_init__(self) -> None:
         if self.speed_efficiency_weight_eps <= 0.0:
             raise ValueError("speed_efficiency_weight_eps must be > 0")
+        if self.tactile_enabled:
+            expected_dim = self.tactile_finger_count * self.tactile_channels_per_finger
+            if self.tactile_dim != expected_dim:
+                raise ValueError(
+                    "Origami tactile_dim must equal tactile_finger_count * tactile_channels_per_finger, "
+                    f"got tactile_dim={self.tactile_dim} and expected {expected_dim}."
+                )
+            if not (0.0 <= self.tactile_quantile_low < self.tactile_quantile_high <= 1.0):
+                raise ValueError(
+                    "Origami tactile quantiles must satisfy 0 <= low < high <= 1, got "
+                    f"{self.tactile_quantile_low} and {self.tactile_quantile_high}."
+                )
+            if self.tactile_min_scale <= 0.0:
+                raise ValueError("Origami tactile_min_scale must be > 0.")
+            if self.tactile_soft_clip_scale <= 0.0:
+                raise ValueError("Origami tactile_soft_clip_scale must be > 0.")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -270,6 +300,11 @@ class Pi0Config(_model.BaseModelConfig):
                 planner_history_latent=(
                     jax.ShapeDtypeStruct([batch_size, self.origami_vla.history_dim], jnp.float32)
                     if self.origami_vla.enabled
+                    else None
+                ),
+                tactile=(
+                    jax.ShapeDtypeStruct([batch_size, self.origami_vla.tactile_dim], jnp.float32)
+                    if self.origami_vla.enabled and self.origami_vla.tactile_enabled
                     else None
                 ),
             )

@@ -66,6 +66,7 @@ IMAGE_RESOLUTION = (224, 224)
 #     "state": float32[*b, s],  # Low-dimensional robot state
 #     "action_mask": bool[*b, ah, ad],  # Optional, loss mask for continuous action dimensions
 #     "sample_weight": float32[*b],  # Optional, per-sample training weight
+#     "tactile": float32[*b, 60],  # Optional, low-dimensional tactile wrench vector
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, l],  # Optional, autoregressive mask for FAST model
@@ -115,6 +116,8 @@ class Observation(Generic[ArrayT]):
     planner_progress_transition: at.Float[ArrayT, "*b p"] | None = None
     planner_uncertainty: at.Float[ArrayT, "*b u"] | None = None
     planner_history_latent: at.Float[ArrayT, "*b hist"] | None = None
+    # Optional tactile wrench observation used by Origami VLA variants.
+    tactile: at.Float[ArrayT, "*b tactile"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -157,6 +160,7 @@ class Observation(Generic[ArrayT]):
             planner_progress_transition=data.get("planner_progress_transition"),
             planner_uncertainty=data.get("planner_uncertainty"),
             planner_history_latent=data.get("planner_history_latent"),
+            tactile=data.get("tactile"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -247,6 +251,7 @@ def preprocess_observation(
         planner_progress_transition=observation.planner_progress_transition,
         planner_uncertainty=observation.planner_uncertainty,
         planner_history_latent=observation.planner_history_latent,
+        tactile=observation.tactile,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,

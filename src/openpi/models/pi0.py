@@ -13,6 +13,7 @@ from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.origami_planner_adapter as _origami_planner_adapter
 import openpi.models.origami_spline_losses as _origami_spline_losses
+import openpi.models.origami_tactile_adapter as _origami_tactile_adapter
 import openpi.models.robot_spline_adapter as _robot_spline_adapter
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
@@ -128,6 +129,21 @@ def _load_origami_action_stats(
     )
 
 
+def _load_origami_tactile_stats(
+    stats_dir: str | None,
+) -> _origami_tactile_adapter.OrigamiTactileNormStats | None:
+    if not stats_dir:
+        return None
+    resolved_dir = _download.maybe_download(stats_dir)
+    path = resolved_dir / _origami_tactile_adapter.TACTILE_NORM_STATS_FILENAME
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Origami tactile normalization stats were not found at {path}. "
+            "Run scripts/compute_origami_vla_norm_stats.py before training."
+        )
+    return _origami_tactile_adapter.load_tactile_norm_stats(path)
+
+
 class Pi0(_model.BaseModel):
     def __init__(self, config: pi0_config.Pi0Config, rngs: nnx.Rngs):
         super().__init__(config.action_dim, config.action_horizon, config.max_token_len)
@@ -136,6 +152,7 @@ class Pi0(_model.BaseModel):
         self.robot_spline_config = config.robot_spline
         self.origami_vla_config = config.origami_vla
         self.origami_action_stats = _load_origami_action_stats(config.origami_vla.action_norm_stats_dir)
+        self.origami_tactile_stats = _load_origami_tactile_stats(config.origami_vla.action_norm_stats_dir)
         self.image_keys = config.image_keys if not (config.robot_spline.enabled and not config.robot_spline.use_image_prefix) else ()
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
@@ -213,6 +230,34 @@ class Pi0(_model.BaseModel):
                 train=False,
                 rngs=rngs,
             )
+            if config.origami_vla.tactile_enabled:
+                if self.origami_tactile_stats is None:
+                    raise FileNotFoundError(
+                        "Origami tactile conditioning is enabled, but tactile normalization stats were not loaded."
+                    )
+                self.origami_tactile_adapter = nnx_bridge.ToNNX(
+                    _origami_tactile_adapter.OrigamiTactilePrefixAdapter(
+                        tactile_dim=config.origami_vla.tactile_dim,
+                        finger_count=config.origami_vla.tactile_finger_count,
+                        channels_per_finger=config.origami_vla.tactile_channels_per_finger,
+                        token_dim=config.origami_vla.tactile_token_dim,
+                        output_dim=paligemma_config.width,
+                        finger_hidden_dims=config.origami_vla.tactile_finger_hidden_dims,
+                        transformer_layers=config.origami_vla.tactile_transformer_layers,
+                        attention_heads=config.origami_vla.tactile_attention_heads,
+                        ffn_dim=config.origami_vla.tactile_ffn_dim,
+                        use_type_embeddings=config.origami_vla.tactile_use_type_embeddings,
+                        tanh_scale=config.origami_vla.tactile_soft_clip_scale,
+                        min_scale=config.origami_vla.tactile_min_scale,
+                        norm_center=self.origami_tactile_stats.center,
+                        norm_scale=self.origami_tactile_stats.scale,
+                    )
+                )
+                self.origami_tactile_adapter.lazy_init(
+                    jnp.zeros((1, config.origami_vla.tactile_dim), dtype=jnp.float32),
+                    train=False,
+                    rngs=rngs,
+                )
         if config.pi05:
             self.time_mlp_in = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
@@ -340,6 +385,18 @@ class Pi0(_model.BaseModel):
             tokens.append(planner_tokens)
             input_mask.append(jnp.ones(planner_tokens.shape[:2], dtype=jnp.bool_))
             ar_mask += [False] * planner_tokens.shape[1]
+            if self.origami_vla_config.tactile_enabled:
+                if obs.tactile is None:
+                    raise ValueError("Origami tactile conditioning is enabled, but observation.tactile is missing.")
+                tactile_tokens = self.origami_tactile_adapter(
+                    jnp.asarray(obs.tactile),
+                    train=train,
+                )
+                if tokens:
+                    tactile_tokens = tactile_tokens.astype(tokens[0].dtype)
+                tokens.append(tactile_tokens)
+                input_mask.append(jnp.ones(tactile_tokens.shape[:2], dtype=jnp.bool_))
+                ar_mask += [False] * tactile_tokens.shape[1]
 
         if not tokens:
             raise ValueError("Prefix construction produced no tokens. Provide at least language/state tokens or another prefix modality.")

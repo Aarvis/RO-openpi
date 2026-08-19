@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import cv2
 import numpy as np
@@ -23,15 +23,27 @@ class OrigamiVlaSettings:
     degree: int = 3
     state_dim: int = 65
     action_dim: int = 65
+    tactile_dim: int = 60
     prompt: str = "Fold paper into airplane"
     sample_weight_column: str = "sample_weight"
     require_sample_weight: bool = False
+    tactile_filename: str = "tactile_60d.npy"
+    image_source_type: Literal["video", "frame_cache"] = "video"
     image_modalities: dict[str, str] = dataclasses.field(
         default_factory=lambda: {
             "ooi_rgb": "videos/ooi.mp4",
             "base_0_rgb": "videos/head_left.mp4",
             "left_wrist_0_rgb": "videos/wrist_left.mp4",
             "right_wrist_0_rgb": "videos/wrist_right.mp4",
+        }
+    )
+    frame_cache_root_relpath: str = "arrays/vla_frame_cache_224_uint8"
+    frame_cache_modalities: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "ooi_rgb": "ooi_rgb_224x224_uint8.npy",
+            "base_0_rgb": "base_0_rgb_224x224_uint8.npy",
+            "left_wrist_0_rgb": "left_wrist_0_rgb_224x224_uint8.npy",
+            "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
         }
     )
     fail_on_missing_modalities: bool = True
@@ -126,18 +138,20 @@ def extract_target_sample(
 class _EpisodeBundle:
     episode_root: Path
     state: np.ndarray
+    tactile: np.ndarray
     timestamps: np.ndarray
     target_archive: Any
     planner_archives: dict[str, Any]
+    frame_cache_archives: dict[str, np.ndarray]
 
 
 class OrigamiVlaDataset:
     def __init__(self, settings: OrigamiVlaSettings, *, split: str):
         self._settings = settings
         self._dataset_root = _ensure_path(settings.dataset_root)
-        self._rows = load_manifest_rows(settings, split).to_dict(orient="records")
         self._episode_cache: dict[str, _EpisodeBundle] = {}
         self._video_cache: dict[str, cv2.VideoCapture] = {}
+        self._rows = load_manifest_rows(settings, split).to_dict(orient="records")
 
     def __len__(self) -> int:
         return len(self._rows)
@@ -149,7 +163,7 @@ class OrigamiVlaDataset:
         return state
 
     def __del__(self) -> None:
-        for capture in self._video_cache.values():
+        for capture in getattr(self, "_video_cache", {}).values():
             capture.release()
 
     def _episode_bundle(self, episode_uid: str) -> _EpisodeBundle:
@@ -165,9 +179,11 @@ class OrigamiVlaDataset:
         bundle = _EpisodeBundle(
             episode_root=episode_root,
             state=np.load(arrays_root / "state_65d.npy", mmap_mode="r"),
+            tactile=np.load(arrays_root / self._settings.tactile_filename, mmap_mode="r"),
             timestamps=np.load(arrays_root / "timestamps.npy", mmap_mode="r"),
             target_archive=np.load(arrays_root / self._settings.local_target_npz_name, allow_pickle=False),
             planner_archives={},
+            frame_cache_archives={},
         )
         for row in self._rows:
             if row["episode_uid"] != episode_uid:
@@ -180,6 +196,20 @@ class OrigamiVlaDataset:
                 / self._settings.planner_arrays_filename
             )
             bundle.planner_archives[view_mode] = np.load(planner_npz, allow_pickle=False)
+
+        if self._settings.image_source_type == "frame_cache":
+            frame_cache_root = episode_root / self._settings.frame_cache_root_relpath
+            missing_modalities: list[str] = []
+            for image_key, filename in self._settings.frame_cache_modalities.items():
+                cache_path = frame_cache_root / filename
+                if not cache_path.exists():
+                    missing_modalities.append(str(cache_path))
+                    continue
+                bundle.frame_cache_archives[image_key] = np.load(cache_path, mmap_mode="r")
+            if missing_modalities and self._settings.fail_on_missing_modalities:
+                raise FileNotFoundError(
+                    f"Missing required frame-cache modalities for {episode_uid}: {missing_modalities}"
+                )
         self._episode_cache[episode_uid] = bundle
         return bundle
 
@@ -201,6 +231,19 @@ class OrigamiVlaDataset:
         if not ok or frame is None:
             raise RuntimeError(f"Could not read frame {frame_position} from {video_path}")
         return cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    def _read_cached_frame(self, cache: np.ndarray, frame_position: int, image_key: str, episode_uid: str) -> np.ndarray:
+        if frame_position < 0 or frame_position >= int(cache.shape[0]):
+            raise IndexError(
+                f"Frame position {frame_position} out of range for cached modality {image_key!r} "
+                f"in {episode_uid}; cache has {int(cache.shape[0])} frames."
+            )
+        frame = np.asarray(cache[frame_position], dtype=np.uint8)
+        if frame.ndim != 3 or frame.shape[-1] != 3:
+            raise ValueError(
+                f"Cached frame for {episode_uid}:{image_key} must have shape [H, W, 3], got {frame.shape}"
+            )
+        return frame
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self._rows[int(index)]
@@ -225,19 +268,33 @@ class OrigamiVlaDataset:
         images: dict[str, np.ndarray] = {}
         image_masks: dict[str, np.ndarray] = {}
         missing_modalities: list[str] = []
-        for image_key, relpath in self._settings.image_modalities.items():
-            video_path = bundle.episode_root / relpath
-            if not video_path.exists():
-                missing_modalities.append(str(video_path))
-                continue
-            images[image_key] = self._read_video_frame(video_path, frame_position)
-            image_masks[image_key] = np.asarray(True)
+        if self._settings.image_source_type == "frame_cache":
+            for image_key, _filename in self._settings.frame_cache_modalities.items():
+                cache = bundle.frame_cache_archives.get(image_key)
+                if cache is None:
+                    missing_modalities.append(str(bundle.episode_root / self._settings.frame_cache_root_relpath / _filename))
+                    continue
+                images[image_key] = self._read_cached_frame(cache, frame_position, image_key, episode_uid)
+                image_masks[image_key] = np.asarray(True)
+        else:
+            for image_key, relpath in self._settings.image_modalities.items():
+                video_path = bundle.episode_root / relpath
+                if not video_path.exists():
+                    missing_modalities.append(str(video_path))
+                    continue
+                images[image_key] = self._read_video_frame(video_path, frame_position)
+                image_masks[image_key] = np.asarray(True)
         if missing_modalities and self._settings.fail_on_missing_modalities:
             raise FileNotFoundError(f"Missing required image modalities for {episode_uid}: {missing_modalities}")
 
         state = np.asarray(bundle.state[frame_position], dtype=np.float32)
         if state.shape[-1] != self._settings.state_dim:
             raise ValueError(f"Expected state dim {self._settings.state_dim}, got {state.shape[-1]}")
+        tactile = np.asarray(bundle.tactile[frame_position], dtype=np.float32).reshape(-1)
+        if tactile.shape[-1] != self._settings.tactile_dim:
+            raise ValueError(
+                f"Expected tactile dim {self._settings.tactile_dim}, got {tactile.shape[-1]} for {episode_uid}"
+            )
 
         if self._settings.require_sample_weight and self._settings.sample_weight_column not in row:
             raise KeyError(
@@ -256,6 +313,7 @@ class OrigamiVlaDataset:
             "image": images,
             "image_mask": image_masks,
             "state": state,
+            "tactile": tactile,
             "state_mask": np.ones((self._settings.state_dim,), dtype=bool),
             "actions": actions,
             "action_mask": action_mask,
