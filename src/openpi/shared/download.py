@@ -45,6 +45,12 @@ def maybe_download(url: str, *, force_download: bool = False, **kwargs) -> pathl
         Local path to the downloaded file or directory. That path is guaranteed to exist and is absolute.
     """
     # Don't use fsspec to parse the url to avoid unnecessary connection to the remote filesystem.
+    if re.match(r"^[A-Za-z]:[\\/]", url):
+        path = pathlib.Path(url)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found at {url}")
+        return path.resolve()
+
     parsed = urllib.parse.urlparse(url)
 
     # Short circuit if this is a local path.

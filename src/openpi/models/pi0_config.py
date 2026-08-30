@@ -1,5 +1,5 @@
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import flax.nnx as nnx
 import jax
@@ -91,6 +91,7 @@ class RobotSplineConfig:
 @dataclasses.dataclass(frozen=True)
 class OrigamiVlaConfig:
     enabled: bool = False
+    action_mode: Literal["spline", "action_chunk"] = "spline"
     # User-facing switch: when enabled, the VLA loss uses per-sample speed-efficiency
     # weights so faster semantic checkpoint executions contribute more strongly.
     episode_execution_speed_preference: bool = False
@@ -114,6 +115,8 @@ class OrigamiVlaConfig:
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
     disable_auxiliary_losses: bool = False
+    tactile_prompt_input: bool = False
+    prompt_discrete_clip: bool = False
     tactile_enabled: bool = False
     tactile_dim: int = 60
     tactile_finger_count: int = 10
@@ -128,6 +131,37 @@ class OrigamiVlaConfig:
     tactile_quantile_high: float = 0.995
     tactile_min_scale: float = 1.0e-6
     tactile_soft_clip_scale: float = 5.0
+    ftp_tactile_enabled: bool = False
+    ftp_tactile_branch: Literal["auto", "deform", "full"] = "auto"
+    ftp_tactile_image_size: int = 224
+    ftp_tactile_patch_size: int = 16
+    ftp_tactile_width: int = 768
+    ftp_tactile_depth: int = 3
+    ftp_tactile_heads: int = 12
+    ftp_tactile_mlp_ratio: int = 4
+    ftp_tactile_backbone_micro_batch: int = 64
+    ftp_tactile_freeze_backbone: bool = True
+    ftp_tactile_include_cls_token: bool = True
+    ftp_tactile_normalize_images: bool = True
+    ftp_tactile_image_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
+    ftp_tactile_image_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
+    ftp_tactile_adapter_dim: int = 512
+    ftp_tactile_prefix_dim: int = 2048
+    ftp_tactile_tokens_per_finger: int = 4
+    ftp_tactile_hands: int = 2
+    ftp_tactile_fingers_per_hand: int = 5
+    ftp_tactile_resampler_layers: int = 2
+    ftp_tactile_resampler_heads: int = 8
+    ftp_tactile_resampler_ffn_dim: int = 2048
+    ftp_tactile_cross_finger_layers: int = 4
+    ftp_tactile_cross_finger_heads: int = 8
+    ftp_tactile_cross_finger_ffn_dim: int = 2048
+    ftp_tactile_dropout: float = 0.1
+    ftp_tactile_rope_enabled: bool = True
+    ftp_tactile_rope_base: float = 10000.0
+    ftp_tactile_rope_scale: float = 1.0
+    ftp_tactile_hand_values: tuple[float, ...] = (-1.0, 1.0)
+    ftp_tactile_finger_values: tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)
     # Internal loss-weighting toggle. Keep this enabled and drive behavior with
     # episode_execution_speed_preference unless you need lower-level debugging.
     use_speed_efficiency_weight: bool = True
@@ -135,9 +169,11 @@ class OrigamiVlaConfig:
     speed_efficiency_weight_eps: float = 1.0e-6
 
     def __post_init__(self) -> None:
+        if self.action_mode not in ("spline", "action_chunk"):
+            raise ValueError(f"Unsupported Origami action_mode: {self.action_mode!r}")
         if self.speed_efficiency_weight_eps <= 0.0:
             raise ValueError("speed_efficiency_weight_eps must be > 0")
-        if self.tactile_enabled:
+        if self.tactile_enabled or self.tactile_prompt_input:
             expected_dim = self.tactile_finger_count * self.tactile_channels_per_finger
             if self.tactile_dim != expected_dim:
                 raise ValueError(
@@ -153,6 +189,35 @@ class OrigamiVlaConfig:
                 raise ValueError("Origami tactile_min_scale must be > 0.")
             if self.tactile_soft_clip_scale <= 0.0:
                 raise ValueError("Origami tactile_soft_clip_scale must be > 0.")
+        if self.ftp_tactile_enabled:
+            if self.ftp_tactile_branch not in ("auto", "deform", "full"):
+                raise ValueError(f"Unsupported ftp_tactile_branch: {self.ftp_tactile_branch!r}")
+            if self.ftp_tactile_image_size <= 0:
+                raise ValueError("ftp_tactile_image_size must be positive.")
+            if self.ftp_tactile_patch_size <= 0:
+                raise ValueError("ftp_tactile_patch_size must be positive.")
+            if self.ftp_tactile_image_size % self.ftp_tactile_patch_size:
+                raise ValueError("ftp_tactile_image_size must be divisible by ftp_tactile_patch_size.")
+            if not self.ftp_tactile_include_cls_token:
+                raise ValueError("FTP SharpaWave prefix support currently expects ftp_tactile_include_cls_token=True.")
+            if self.ftp_tactile_adapter_dim <= 0 or self.ftp_tactile_prefix_dim <= 0:
+                raise ValueError("FTP tactile adapter and prefix dimensions must be positive.")
+            if self.ftp_tactile_adapter_dim % self.ftp_tactile_resampler_heads:
+                raise ValueError("ftp_tactile_adapter_dim must be divisible by ftp_tactile_resampler_heads.")
+            if self.ftp_tactile_adapter_dim % self.ftp_tactile_cross_finger_heads:
+                raise ValueError("ftp_tactile_adapter_dim must be divisible by ftp_tactile_cross_finger_heads.")
+            if self.ftp_tactile_width % self.ftp_tactile_heads:
+                raise ValueError("ftp_tactile_width must be divisible by ftp_tactile_heads.")
+            if self.ftp_tactile_tokens_per_finger <= 0:
+                raise ValueError("ftp_tactile_tokens_per_finger must be positive.")
+            if self.ftp_tactile_hands <= 0 or self.ftp_tactile_fingers_per_hand <= 0:
+                raise ValueError("FTP tactile hands and fingers_per_hand must be positive.")
+            if len(self.ftp_tactile_hand_values) != self.ftp_tactile_hands:
+                raise ValueError("ftp_tactile_hand_values must match ftp_tactile_hands.")
+            if len(self.ftp_tactile_finger_values) != self.ftp_tactile_fingers_per_hand:
+                raise ValueError("ftp_tactile_finger_values must match ftp_tactile_fingers_per_hand.")
+            if not 0.0 <= self.ftp_tactile_dropout < 1.0:
+                raise ValueError("ftp_tactile_dropout must satisfy 0 <= dropout < 1.")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -188,12 +253,20 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError("image_keys must contain at least one image key when using the image prefix.")
         if self.origami_vla.enabled and not self.pi05:
             raise ValueError("Origami VLA support is currently implemented only for pi0.5.")
-        if self.origami_vla.enabled and self.action_horizon != self.origami_vla.max_control_points + 1:
+        if (
+            self.origami_vla.enabled
+            and self.origami_vla.action_mode == "spline"
+            and self.action_horizon != self.origami_vla.max_control_points + 1
+        ):
             raise ValueError(
                 "Origami VLA actions are packed as control-point tokens plus one span-width token, "
                 f"so action_horizon must equal {self.origami_vla.max_control_points + 1}, got {self.action_horizon}."
             )
-        if self.origami_vla.enabled and self.action_dim < self.origami_vla.max_span_count:
+        if (
+            self.origami_vla.enabled
+            and self.origami_vla.action_mode == "spline"
+            and self.action_dim < self.origami_vla.max_span_count
+        ):
             raise ValueError(
                 f"Origami VLA action_dim ({self.action_dim}) must be >= max_span_count "
                 f"({self.origami_vla.max_span_count})."
@@ -302,9 +375,47 @@ class Pi0Config(_model.BaseModelConfig):
                     if self.origami_vla.enabled
                     else None
                 ),
+                planner_available=(
+                    jax.ShapeDtypeStruct([batch_size], jnp.bool_)
+                    if self.origami_vla.enabled
+                    else None
+                ),
                 tactile=(
                     jax.ShapeDtypeStruct([batch_size, self.origami_vla.tactile_dim], jnp.float32)
                     if self.origami_vla.enabled and self.origami_vla.tactile_enabled
+                    else None
+                ),
+                tactile_deform_images=(
+                    jax.ShapeDtypeStruct(
+                        [
+                            batch_size,
+                            self.origami_vla.ftp_tactile_hands * self.origami_vla.ftp_tactile_fingers_per_hand,
+                            3,
+                            self.origami_vla.ftp_tactile_image_size,
+                            self.origami_vla.ftp_tactile_image_size,
+                        ],
+                        jnp.uint8,
+                    )
+                    if self.origami_vla.enabled and self.origami_vla.ftp_tactile_enabled
+                    else None
+                ),
+                tactile_raw_images=(
+                    jax.ShapeDtypeStruct(
+                        [
+                            batch_size,
+                            self.origami_vla.ftp_tactile_hands * self.origami_vla.ftp_tactile_fingers_per_hand,
+                            3,
+                            self.origami_vla.ftp_tactile_image_size,
+                            self.origami_vla.ftp_tactile_image_size,
+                        ],
+                        jnp.uint8,
+                    )
+                    if self.origami_vla.enabled and self.origami_vla.ftp_tactile_enabled
+                    else None
+                ),
+                tactile_raw_available=(
+                    jax.ShapeDtypeStruct([batch_size], jnp.bool_)
+                    if self.origami_vla.enabled and self.origami_vla.ftp_tactile_enabled
                     else None
                 ),
             )
@@ -339,6 +450,12 @@ class Pi0Config(_model.BaseModelConfig):
             filters.append(
                 nnx.Not(nnx_utils.PathRegex(".*lora.*")),
             )
+        if (
+            self.origami_vla.enabled
+            and self.origami_vla.ftp_tactile_enabled
+            and self.origami_vla.ftp_tactile_freeze_backbone
+        ):
+            filters.append(nnx_utils.PathRegex(".*origami_ftp_tactile_prefix_encoder/backbone/.*"))
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 from pathlib import Path
 from typing import Any, Literal
 
@@ -18,7 +19,18 @@ class OrigamiVlaSettings:
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
     planner_arrays_filename: str = "planner_vla_rollout_features.npz"
     planner_index_filename: str = "planner_vla_rollout_index.parquet"
+    planner_branch: str = "alias"
+    planner_value_variant: Literal["final", "raw"] = "final"
+    planner_belief_dim: int = 29
+    planner_progress_dim: int = 2
+    planner_uncertainty_dim: int = 3
+    planner_history_dim: int = 512
+    action_source: Literal["spline", "action_chunk"] = "spline"
+    action_filename: str = "action_65d.npy"
+    action_chunk_stride: int = 1
+    drop_horizon_clipped: bool = False
     max_control_points: int = 18
+    action_horizon: int = 19
     max_span_count: int = 15
     degree: int = 3
     state_dim: int = 65
@@ -46,12 +58,128 @@ class OrigamiVlaSettings:
             "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
         }
     )
+    load_tactile_images: bool = False
+    tactile_deform_video: str = "videos/tactile_deform.mp4"
+    tactile_raw_video: str = "videos/tactile_raw.mp4"
+    tactile_require_raw_video: bool = False
+    tactile_image_size: int = 224
+    tactile_raw_input_dropout_prob: float = 0.0
+    tactile_raw_dropout_seed: int = 1234
+    tactile_raw_grid: dict[str, Any] = dataclasses.field(
+        default_factory=lambda: {
+            "rows": 2,
+            "cols": 5,
+            "expected_width": 1600,
+            "expected_height": 480,
+            "resize_mode": "resize",
+        }
+    )
+    tactile_deform_grid: dict[str, Any] = dataclasses.field(
+        default_factory=lambda: {
+            "rows": 2,
+            "cols": 5,
+            "expected_width": 1200,
+            "expected_height": 480,
+            "resize_mode": "resize",
+        }
+    )
+    include_planner_features: bool = True
     fail_on_missing_modalities: bool = True
     max_rows: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.action_chunk_stride <= 0:
+            raise ValueError(f"action_chunk_stride must be positive, got {self.action_chunk_stride}")
+        if self.action_horizon <= 0:
+            raise ValueError(f"action_horizon must be positive, got {self.action_horizon}")
+        if "/" in self.planner_branch or "\\" in self.planner_branch:
+            raise ValueError(f"planner_branch must be a simple branch name, got {self.planner_branch!r}")
+        if self.planner_value_variant not in {"final", "raw"}:
+            raise ValueError(f"planner_value_variant must be 'final' or 'raw', got {self.planner_value_variant!r}")
+        if self.planner_belief_dim <= 0:
+            raise ValueError(f"planner_belief_dim must be positive, got {self.planner_belief_dim}")
+        if self.planner_progress_dim <= 0:
+            raise ValueError(f"planner_progress_dim must be positive, got {self.planner_progress_dim}")
+        if self.planner_uncertainty_dim <= 0:
+            raise ValueError(f"planner_uncertainty_dim must be positive, got {self.planner_uncertainty_dim}")
+        if self.planner_history_dim <= 0:
+            raise ValueError(f"planner_history_dim must be positive, got {self.planner_history_dim}")
+        if self.tactile_image_size <= 0:
+            raise ValueError(f"tactile_image_size must be positive, got {self.tactile_image_size}")
+        if not 0.0 <= self.tactile_raw_input_dropout_prob <= 1.0:
+            raise ValueError(
+                "tactile_raw_input_dropout_prob must satisfy 0 <= p <= 1, "
+                f"got {self.tactile_raw_input_dropout_prob}"
+            )
 
 
 def _ensure_path(value: str | Path) -> Path:
     return value if isinstance(value, Path) else Path(value)
+
+
+def _planner_feature_key(base_key: str, branch: str) -> str:
+    branch = str(branch or "alias")
+    if branch in {"alias", "compatibility", "default"}:
+        return base_key
+    return f"{branch}_{base_key}"
+
+
+def _read_planner_feature(planner: Any, base_key: str, branch: str, row_index: int) -> np.ndarray:
+    key = _planner_feature_key(base_key, branch)
+    if key not in planner:
+        available = sorted(str(name) for name in planner.files)
+        raise KeyError(
+            f"Planner rollout feature {key!r} is missing. "
+            f"Set planner_branch to one of the exported branches or use 'alias'. Available keys: {available}"
+        )
+    return planner[key][row_index]
+
+
+def _row_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    try:
+        if pd.isna(value):
+            return default
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "no", "none"}
+    return bool(value)
+
+
+def _planner_state_belief_key(value_variant: str) -> str:
+    if value_variant == "final":
+        return "final_state_belief"
+    if value_variant == "raw":
+        return "raw_state_belief"
+    raise ValueError(f"Unsupported planner value variant: {value_variant!r}")
+
+
+def _filter_horizon_clipped_rows(settings: OrigamiVlaSettings, frame: pd.DataFrame) -> pd.DataFrame:
+    if not settings.drop_horizon_clipped or frame.empty:
+        return frame
+    if "horizon_clipped_to_episode_end" in frame.columns:
+        return frame[~frame["horizon_clipped_to_episode_end"].astype(bool)].reset_index(drop=True)
+    if settings.action_source != "action_chunk":
+        return frame
+
+    dataset_root = _ensure_path(settings.dataset_root)
+    keep = np.ones(len(frame), dtype=bool)
+    action_lengths: dict[str, int] = {}
+    for episode_uid, group in frame.groupby("episode_uid", sort=False):
+        episode_uid = str(episode_uid)
+        action_len = action_lengths.get(episode_uid)
+        if action_len is None:
+            action_path = dataset_root / "episodes" / episode_uid / "arrays" / settings.action_filename
+            action_len = int(np.load(action_path, mmap_mode="r").shape[0])
+            action_lengths[episode_uid] = action_len
+        horizon_end = (
+            group["frame_position"].to_numpy(dtype=np.int64)
+            + (int(settings.action_horizon) - 1) * int(settings.action_chunk_stride)
+        )
+        keep[group.index.to_numpy(dtype=np.int64)] = horizon_end < action_len
+    return frame[keep].reset_index(drop=True)
 
 
 def load_manifest_rows(settings: OrigamiVlaSettings, split: str) -> pd.DataFrame:
@@ -65,10 +193,12 @@ def load_manifest_rows(settings: OrigamiVlaSettings, split: str) -> pd.DataFrame
         train_frame = pd.read_parquet(manifest_root / settings.manifest_train_name)
         val_frame = pd.read_parquet(manifest_root / settings.manifest_val_name)
         frame = pd.concat([train_frame, val_frame], axis=0, ignore_index=True)
+        frame = _filter_horizon_clipped_rows(settings, frame)
         return frame if settings.max_rows is None else frame.iloc[: settings.max_rows].reset_index(drop=True)
     else:
         raise ValueError(f"Unsupported split {split!r}. Expected train, val, or all.")
     frame = pd.read_parquet(path)
+    frame = _filter_horizon_clipped_rows(settings, frame)
     if settings.max_rows is not None:
         frame = frame.iloc[: settings.max_rows].reset_index(drop=True)
     return frame
@@ -134,13 +264,36 @@ def extract_target_sample(
     return control_points[cp_start:cp_end], local_knots[knot_start:knot_end]
 
 
+def extract_action_chunk(
+    action_array: np.ndarray,
+    frame_position: int,
+    *,
+    action_horizon: int,
+    action_dim: int,
+    action_chunk_stride: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    actions = np.zeros((action_horizon, action_dim), dtype=np.float32)
+    action_mask = np.zeros((action_horizon, action_dim), dtype=bool)
+    positions = int(frame_position) + np.arange(action_horizon, dtype=np.int64) * int(action_chunk_stride)
+    valid = (positions >= 0) & (positions < int(action_array.shape[0]))
+    if np.any(valid):
+        valid_positions = positions[valid]
+        valid_actions = np.asarray(action_array[valid_positions], dtype=np.float32)
+        if valid_actions.ndim != 2 or valid_actions.shape[-1] != action_dim:
+            raise ValueError(f"Expected action chunk dim {action_dim}, got {valid_actions.shape}")
+        actions[valid] = valid_actions
+        action_mask[valid, :] = True
+    return actions, action_mask
+
+
 @dataclasses.dataclass
 class _EpisodeBundle:
     episode_root: Path
     state: np.ndarray
+    actions: np.ndarray | None
     tactile: np.ndarray
     timestamps: np.ndarray
-    target_archive: Any
+    target_archive: Any | None
     planner_archives: dict[str, Any]
     frame_cache_archives: dict[str, np.ndarray]
 
@@ -179,23 +332,38 @@ class OrigamiVlaDataset:
         bundle = _EpisodeBundle(
             episode_root=episode_root,
             state=np.load(arrays_root / "state_65d.npy", mmap_mode="r"),
+            actions=(
+                np.load(arrays_root / self._settings.action_filename, mmap_mode="r")
+                if self._settings.action_source == "action_chunk"
+                else None
+            ),
             tactile=np.load(arrays_root / self._settings.tactile_filename, mmap_mode="r"),
             timestamps=np.load(arrays_root / "timestamps.npy", mmap_mode="r"),
-            target_archive=np.load(arrays_root / self._settings.local_target_npz_name, allow_pickle=False),
+            target_archive=(
+                np.load(arrays_root / self._settings.local_target_npz_name, allow_pickle=False)
+                if self._settings.action_source == "spline"
+                else None
+            ),
             planner_archives={},
             frame_cache_archives={},
         )
-        for row in self._rows:
-            if row["episode_uid"] != episode_uid:
-                continue
-            view_mode = str(row["view_mode"])
-            if view_mode in bundle.planner_archives:
-                continue
-            planner_npz = (
-                _ensure_path(row["planner_output_dir"])
-                / self._settings.planner_arrays_filename
-            )
-            bundle.planner_archives[view_mode] = np.load(planner_npz, allow_pickle=False)
+        if self._settings.include_planner_features:
+            for row in self._rows:
+                if row["episode_uid"] != episode_uid:
+                    continue
+                if not _row_bool(row.get("planner_enabled", True), default=True):
+                    continue
+                view_mode = str(row["view_mode"])
+                if view_mode in bundle.planner_archives:
+                    continue
+                planner_output_dir = row.get("planner_output_dir")
+                if planner_output_dir is None or pd.isna(planner_output_dir) or not str(planner_output_dir):
+                    raise ValueError(f"Planner is enabled for {episode_uid}:{view_mode}, but planner_output_dir is empty.")
+                planner_npz = (
+                    _ensure_path(planner_output_dir)
+                    / self._settings.planner_arrays_filename
+                )
+                bundle.planner_archives[view_mode] = np.load(planner_npz, allow_pickle=False)
 
         if self._settings.image_source_type == "frame_cache":
             frame_cache_root = episode_root / self._settings.frame_cache_root_relpath
@@ -245,26 +413,122 @@ class OrigamiVlaDataset:
             )
         return frame
 
+    def _resize_tactile_cell(self, cell: np.ndarray, mode: str) -> np.ndarray:
+        image_size = int(self._settings.tactile_image_size)
+        if mode == "resize":
+            return cv2.resize(cell, (image_size, image_size), interpolation=cv2.INTER_LINEAR)
+        if mode == "pad":
+            height, width = cell.shape[:2]
+            scale = min(image_size / height, image_size / width)
+            new_h = max(1, int(round(height * scale)))
+            new_w = max(1, int(round(width * scale)))
+            resized = cv2.resize(cell, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            canvas = np.zeros((image_size, image_size, 3), dtype=np.uint8)
+            top = (image_size - new_h) // 2
+            left = (image_size - new_w) // 2
+            canvas[top : top + new_h, left : left + new_w] = resized
+            return canvas
+        raise ValueError(f"Unknown tactile resize_mode: {mode!r}")
+
+    def _split_tactile_grid(self, frame: np.ndarray, grid_cfg: dict[str, Any], episode_uid: str) -> np.ndarray:
+        rows = int(grid_cfg["rows"])
+        cols = int(grid_cfg["cols"])
+        height, width, channels = frame.shape
+        expected_height = int(grid_cfg.get("expected_height", height))
+        expected_width = int(grid_cfg.get("expected_width", width))
+        if (width, height) != (expected_width, expected_height):
+            raise ValueError(
+                f"Tactile grid shape {(width, height)} != expected {(expected_width, expected_height)} "
+                f"for {episode_uid}"
+            )
+        if channels != 3 or height % rows or width % cols:
+            raise ValueError(f"Invalid tactile grid shape {frame.shape} for {rows}x{cols} in {episode_uid}")
+        cell_h = height // rows
+        cell_w = width // cols
+        mode = str(grid_cfg.get("resize_mode", "resize"))
+        cells: list[np.ndarray] = []
+        for row in range(rows):
+            for col in range(cols):
+                cell = frame[row * cell_h : (row + 1) * cell_h, col * cell_w : (col + 1) * cell_w]
+                cells.append(self._resize_tactile_cell(cell, mode))
+        return np.ascontiguousarray(np.stack(cells, axis=0).transpose(0, 3, 1, 2))
+
+    def _drop_tactile_raw_input(self, episode_uid: str, frame_position: int) -> bool:
+        probability = float(self._settings.tactile_raw_input_dropout_prob)
+        if probability <= 0.0:
+            return False
+        if probability >= 1.0:
+            return True
+        payload = f"{self._settings.tactile_raw_dropout_seed}:{episode_uid}:{int(frame_position)}".encode("utf-8")
+        value = int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "little") / float(1 << 64)
+        return value < probability
+
+    def _read_tactile_images(self, bundle: _EpisodeBundle, frame_position: int, episode_uid: str) -> dict[str, np.ndarray]:
+        deform_path = bundle.episode_root / self._settings.tactile_deform_video
+        raw_path = bundle.episode_root / self._settings.tactile_raw_video
+        if not deform_path.exists():
+            raise FileNotFoundError(f"Missing tactile deform video for {episode_uid}: {deform_path}")
+        if self._settings.tactile_require_raw_video and not raw_path.exists():
+            raise FileNotFoundError(f"Missing required tactile raw video for {episode_uid}: {raw_path}")
+
+        deform_frame = self._read_video_frame(deform_path, frame_position)
+        deform_images = self._split_tactile_grid(deform_frame, self._settings.tactile_deform_grid, episode_uid)
+        raw_available = raw_path.exists()
+        if raw_available:
+            try:
+                raw_frame = self._read_video_frame(raw_path, frame_position)
+            except RuntimeError:
+                if self._settings.tactile_require_raw_video:
+                    raise
+                raw_available = False
+                raw_images = np.zeros_like(deform_images)
+            else:
+                raw_images = self._split_tactile_grid(raw_frame, self._settings.tactile_raw_grid, episode_uid)
+        else:
+            raw_images = np.zeros_like(deform_images)
+
+        if raw_available and self._drop_tactile_raw_input(episode_uid, frame_position):
+            raw_images = np.zeros_like(deform_images)
+            raw_available = False
+
+        return {
+            "tactile_deform_images": deform_images,
+            "tactile_raw_images": raw_images,
+            "tactile_raw_available": np.asarray(raw_available, dtype=bool),
+        }
+
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self._rows[int(index)]
         episode_uid = str(row["episode_uid"])
         frame_position = int(row["frame_position"])
-        target_sample_index = int(row["local_target_npz_sample_index"])
-        planner_row_index = int(row["planner_row_index"])
-        view_mode = str(row["view_mode"])
+        view_mode = str(row.get("view_mode", "action_chunk"))
 
         bundle = self._episode_bundle(episode_uid)
-        control_points, local_knots = extract_target_sample(bundle.target_archive, target_sample_index)
-        span_widths = local_knots_to_span_widths(local_knots, self._settings.degree)
-        actions, action_mask = pack_spline_actions(
-            control_points,
-            span_widths,
-            max_control_points=self._settings.max_control_points,
-            max_span_count=self._settings.max_span_count,
-            action_dim=self._settings.action_dim,
-        )
-
-        planner = bundle.planner_archives[view_mode]
+        if self._settings.action_source == "spline":
+            if bundle.target_archive is None:
+                raise RuntimeError(f"Spline action source requested, but target archive is missing for {episode_uid}.")
+            target_sample_index = int(row["local_target_npz_sample_index"])
+            control_points, local_knots = extract_target_sample(bundle.target_archive, target_sample_index)
+            span_widths = local_knots_to_span_widths(local_knots, self._settings.degree)
+            actions, action_mask = pack_spline_actions(
+                control_points,
+                span_widths,
+                max_control_points=self._settings.max_control_points,
+                max_span_count=self._settings.max_span_count,
+                action_dim=self._settings.action_dim,
+            )
+        elif self._settings.action_source == "action_chunk":
+            if bundle.actions is None:
+                raise RuntimeError(f"Action-chunk source requested, but action array is missing for {episode_uid}.")
+            actions, action_mask = extract_action_chunk(
+                bundle.actions,
+                frame_position,
+                action_horizon=self._settings.action_horizon,
+                action_dim=self._settings.action_dim,
+                action_chunk_stride=self._settings.action_chunk_stride,
+            )
+        else:
+            raise ValueError(f"Unsupported action_source: {self._settings.action_source!r}")
         images: dict[str, np.ndarray] = {}
         image_masks: dict[str, np.ndarray] = {}
         missing_modalities: list[str] = []
@@ -309,23 +573,72 @@ class OrigamiVlaDataset:
                 )
             sample_weight_value = 1.0
 
-        return {
+        output = {
             "image": images,
             "image_mask": image_masks,
             "state": state,
             "tactile": tactile,
+            "tactile_prompt": np.array(tactile, copy=True),
+            "tactile_prompt_mask": np.ones((self._settings.tactile_dim,), dtype=bool),
             "state_mask": np.ones((self._settings.state_dim,), dtype=bool),
             "actions": actions,
             "action_mask": action_mask,
             "sample_weight": np.asarray(float(sample_weight_value), dtype=np.float32),
             "prompt": np.asarray(self._settings.prompt),
-            "planner_state_belief": np.asarray(planner["final_state_belief"][planner_row_index], dtype=np.float32),
-            "planner_progress_transition": np.asarray(
-                planner["progress_transition"][planner_row_index], dtype=np.float32
-            ),
-            "planner_uncertainty": np.asarray(planner["uncertainty_features"][planner_row_index], dtype=np.float32),
-            "planner_history_latent": np.asarray(planner["temporal_latent"][planner_row_index], dtype=np.float32),
             "frame_position": np.asarray(frame_position, dtype=np.int64),
             "frame_index": np.asarray(int(row["frame_index"]), dtype=np.int64),
             "timestamp": np.asarray(bundle.timestamps[frame_position], dtype=np.float32),
         }
+        if self._settings.include_planner_features:
+            planner_enabled = _row_bool(row.get("planner_enabled", True), default=True)
+            output["planner_available"] = np.asarray(planner_enabled, dtype=bool)
+            if not planner_enabled:
+                output.update(
+                    {
+                        "planner_state_belief": np.zeros((self._settings.planner_belief_dim,), dtype=np.float32),
+                        "planner_progress_transition": np.zeros(
+                            (self._settings.planner_progress_dim,), dtype=np.float32
+                        ),
+                        "planner_uncertainty": np.zeros((self._settings.planner_uncertainty_dim,), dtype=np.float32),
+                        "planner_history_latent": np.zeros((self._settings.planner_history_dim,), dtype=np.float32),
+                    }
+                )
+            else:
+                planner_row_index = int(row["planner_row_index"])
+                planner_branch_value = row.get("planner_branch", self._settings.planner_branch)
+                if pd.isna(planner_branch_value):
+                    planner_branch_value = self._settings.planner_branch
+                planner_branch = str(planner_branch_value or self._settings.planner_branch)
+                planner_value_variant = row.get("planner_value_variant", self._settings.planner_value_variant)
+                if pd.isna(planner_value_variant):
+                    planner_value_variant = self._settings.planner_value_variant
+                planner_value_variant = str(planner_value_variant or self._settings.planner_value_variant)
+                planner = bundle.planner_archives[view_mode]
+                output.update(
+                    {
+                        "planner_state_belief": np.asarray(
+                            _read_planner_feature(
+                                planner,
+                                _planner_state_belief_key(planner_value_variant),
+                                planner_branch,
+                                planner_row_index,
+                            ),
+                            dtype=np.float32,
+                        ),
+                        "planner_progress_transition": np.asarray(
+                            _read_planner_feature(planner, "progress_transition", planner_branch, planner_row_index),
+                            dtype=np.float32,
+                        ),
+                        "planner_uncertainty": np.asarray(
+                            _read_planner_feature(planner, "uncertainty_features", planner_branch, planner_row_index),
+                            dtype=np.float32,
+                        ),
+                        "planner_history_latent": np.asarray(
+                            _read_planner_feature(planner, "temporal_latent", planner_branch, planner_row_index),
+                            dtype=np.float32,
+                        ),
+                    }
+                )
+        if self._settings.load_tactile_images:
+            output.update(self._read_tactile_images(bundle, frame_position, episode_uid))
+        return output

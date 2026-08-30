@@ -171,13 +171,16 @@ def train_step(
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
-    if config.non_adapter_lr_multiplier is not None:
+    if config.param_lr_multipliers:
+        updates = nnx_utils.scale_state_updates_by_path(
+            updates,
+            [(rule.regex, rule.multiplier) for rule in config.param_lr_multipliers],
+        )
+    elif config.non_adapter_lr_multiplier is not None:
         adapter_filter = nnx_utils.PathRegex(config.adapter_param_regex)
 
         def scale_update(update):
-            if hasattr(update, "value"):
-                return update.replace(update.value * config.non_adapter_lr_multiplier)
-            return update * config.non_adapter_lr_multiplier
+            return nnx_utils.scale_update_leaf(update, config.non_adapter_lr_multiplier)
 
         updates = nnx_utils.state_map(
             updates,

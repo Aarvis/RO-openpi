@@ -96,6 +96,40 @@ def test_tokenize_prompt_with_masked_state():
     assert not np.array_equal(unmasked_prompt, data["tokenized_prompt"])
 
 
+def test_tokenize_prompt_with_tactile_prompt():
+    tokenizer = _tokenizer.PaligemmaTokenizer(max_len=128)
+    transform = _transforms.TokenizePrompt(
+        tokenizer,
+        discrete_state_input=True,
+        discrete_tactile_input=True,
+        clip_discrete_inputs=True,
+    )
+
+    state = np.array([-2.0, 0.0, 2.0], dtype=np.float32)
+    tactile = np.array([-1.0, 0.5, 1.5], dtype=np.float32)
+    tactile_mask = np.array([True, False, True])
+
+    data = transform(
+        {
+            "prompt": "Fold the garment",
+            "state": state,
+            "tactile_prompt": tactile,
+            "tactile_prompt_mask": tactile_mask,
+        }
+    )
+
+    tok_prompt, tok_mask = tokenizer.tokenize(
+        "Fold the garment",
+        state,
+        None,
+        tactile,
+        tactile_mask,
+        clip_discrete_inputs=True,
+    )
+    assert np.allclose(tok_prompt, data["tokenized_prompt"])
+    assert np.allclose(tok_mask, data["tokenized_prompt_mask"])
+
+
 def test_tokenize_no_prompt():
     transform = _transforms.TokenizePrompt(_tokenizer.PaligemmaTokenizer())
 

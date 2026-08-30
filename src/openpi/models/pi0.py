@@ -12,6 +12,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.origami_planner_adapter as _origami_planner_adapter
+import openpi.models.origami_ftp_tactile_prefix_encoder as _origami_ftp_tactile_prefix_encoder
 import openpi.models.origami_spline_losses as _origami_spline_losses
 import openpi.models.origami_tactile_adapter as _origami_tactile_adapter
 import openpi.models.robot_spline_adapter as _robot_spline_adapter
@@ -153,8 +154,18 @@ class Pi0(_model.BaseModel):
         self.future_latent_config = config.future_latent
         self.robot_spline_config = config.robot_spline
         self.origami_vla_config = config.origami_vla
-        self.origami_action_stats = _load_origami_action_stats(config.origami_vla.action_norm_stats_dir)
-        self.origami_tactile_stats = _load_origami_tactile_stats(config.origami_vla.action_norm_stats_dir)
+        self.origami_action_stats = (
+            _load_origami_action_stats(config.origami_vla.action_norm_stats_dir)
+            if config.origami_vla.enabled
+            and config.origami_vla.action_mode == "spline"
+            and not config.origami_vla.disable_auxiliary_losses
+            else None
+        )
+        self.origami_tactile_stats = (
+            _load_origami_tactile_stats(config.origami_vla.action_norm_stats_dir)
+            if config.origami_vla.enabled and config.origami_vla.tactile_enabled
+            else None
+        )
         self.image_keys = config.image_keys if not (config.robot_spline.enabled and not config.robot_spline.use_image_prefix) else ()
         paligemma_config = _gemma.get_config(config.paligemma_variant)
         action_expert_config = _gemma.get_config(config.action_expert_variant)
@@ -232,6 +243,66 @@ class Pi0(_model.BaseModel):
                 train=False,
                 rngs=rngs,
             )
+            if config.origami_vla.ftp_tactile_enabled:
+                if config.origami_vla.ftp_tactile_prefix_dim != paligemma_config.width:
+                    raise ValueError(
+                        "ftp_tactile_prefix_dim must match the PaliGemma prefix width, "
+                        f"got {config.origami_vla.ftp_tactile_prefix_dim} and {paligemma_config.width}."
+                    )
+                ftp_tactile_cfg = _origami_ftp_tactile_prefix_encoder.FtpTactilePrefixConfig(
+                    image_size=config.origami_vla.ftp_tactile_image_size,
+                    patch_size=config.origami_vla.ftp_tactile_patch_size,
+                    ftp_width=config.origami_vla.ftp_tactile_width,
+                    ftp_depth=config.origami_vla.ftp_tactile_depth,
+                    ftp_heads=config.origami_vla.ftp_tactile_heads,
+                    ftp_mlp_ratio=config.origami_vla.ftp_tactile_mlp_ratio,
+                    backbone_micro_batch=config.origami_vla.ftp_tactile_backbone_micro_batch,
+                    freeze_backbone=config.origami_vla.ftp_tactile_freeze_backbone,
+                    include_cls_token=config.origami_vla.ftp_tactile_include_cls_token,
+                    normalize_images=config.origami_vla.ftp_tactile_normalize_images,
+                    image_mean=config.origami_vla.ftp_tactile_image_mean,
+                    image_std=config.origami_vla.ftp_tactile_image_std,
+                    adapter_dim=config.origami_vla.ftp_tactile_adapter_dim,
+                    prefix_dim=config.origami_vla.ftp_tactile_prefix_dim,
+                    tokens_per_finger=config.origami_vla.ftp_tactile_tokens_per_finger,
+                    hands=config.origami_vla.ftp_tactile_hands,
+                    fingers_per_hand=config.origami_vla.ftp_tactile_fingers_per_hand,
+                    resampler_layers=config.origami_vla.ftp_tactile_resampler_layers,
+                    resampler_heads=config.origami_vla.ftp_tactile_resampler_heads,
+                    resampler_ffn_dim=config.origami_vla.ftp_tactile_resampler_ffn_dim,
+                    cross_finger_layers=config.origami_vla.ftp_tactile_cross_finger_layers,
+                    cross_finger_heads=config.origami_vla.ftp_tactile_cross_finger_heads,
+                    cross_finger_ffn_dim=config.origami_vla.ftp_tactile_cross_finger_ffn_dim,
+                    dropout=config.origami_vla.ftp_tactile_dropout,
+                    rope_enabled=config.origami_vla.ftp_tactile_rope_enabled,
+                    rope_base=config.origami_vla.ftp_tactile_rope_base,
+                    rope_scale=config.origami_vla.ftp_tactile_rope_scale,
+                    hand_values=config.origami_vla.ftp_tactile_hand_values,
+                    finger_values=config.origami_vla.ftp_tactile_finger_values,
+                    branch=config.origami_vla.ftp_tactile_branch,
+                )
+                self.origami_ftp_tactile_prefix_encoder = nnx_bridge.ToNNX(
+                    _origami_ftp_tactile_prefix_encoder.OrigamiFtpTactilePrefixEncoder(
+                        ftp_tactile_cfg,
+                    )
+                )
+                tactile_images = jnp.zeros(
+                    (
+                        1,
+                        ftp_tactile_cfg.finger_count,
+                        3,
+                        ftp_tactile_cfg.image_size,
+                        ftp_tactile_cfg.image_size,
+                    ),
+                    dtype=jnp.uint8,
+                )
+                self.origami_ftp_tactile_prefix_encoder.lazy_init(
+                    tactile_images,
+                    tactile_images,
+                    jnp.ones((1,), dtype=jnp.bool_),
+                    train=False,
+                    rngs=rngs,
+                )
             if config.origami_vla.tactile_enabled:
                 if self.origami_tactile_stats is None:
                     raise FileNotFoundError(
@@ -385,7 +456,12 @@ class Pi0(_model.BaseModel):
             if tokens:
                 planner_tokens = planner_tokens.astype(tokens[0].dtype)
             tokens.append(planner_tokens)
-            input_mask.append(jnp.ones(planner_tokens.shape[:2], dtype=jnp.bool_))
+            if obs.planner_available is None:
+                planner_mask = jnp.ones(planner_tokens.shape[:-1], dtype=jnp.bool_)
+            else:
+                planner_available = jnp.asarray(obs.planner_available, dtype=jnp.bool_)
+                planner_mask = jnp.broadcast_to(planner_available[..., None], planner_tokens.shape[:-1])
+            input_mask.append(planner_mask)
             ar_mask += [False] * planner_tokens.shape[1]
             if self.origami_vla_config.tactile_enabled:
                 if obs.tactile is None:
@@ -399,6 +475,24 @@ class Pi0(_model.BaseModel):
                 tokens.append(tactile_tokens)
                 input_mask.append(jnp.ones(tactile_tokens.shape[:2], dtype=jnp.bool_))
                 ar_mask += [False] * tactile_tokens.shape[1]
+            if self.origami_vla_config.ftp_tactile_enabled:
+                if obs.tactile_deform_images is None:
+                    raise ValueError(
+                        "Origami FTP tactile prefix conditioning is enabled, but tactile_deform_images is missing."
+                    )
+                ftp_tactile_tokens = self.origami_ftp_tactile_prefix_encoder(
+                    jnp.asarray(obs.tactile_deform_images),
+                    None if obs.tactile_raw_images is None else jnp.asarray(obs.tactile_raw_images),
+                    None if obs.tactile_raw_available is None else jnp.asarray(obs.tactile_raw_available),
+                    # Keep the pretrained tactile prefix path deterministic inside Pi0.5.
+                    # The non-frozen tactile weights still receive gradients from the VLA loss.
+                    train=False,
+                )
+                if tokens:
+                    ftp_tactile_tokens = ftp_tactile_tokens.astype(tokens[0].dtype)
+                tokens.append(ftp_tactile_tokens)
+                input_mask.append(jnp.ones(ftp_tactile_tokens.shape[:2], dtype=jnp.bool_))
+                ar_mask += [False] * ftp_tactile_tokens.shape[1]
 
         if not tokens:
             raise ValueError("Prefix construction produced no tokens. Provide at least language/state tokens or another prefix modality.")
@@ -522,7 +616,7 @@ class Pi0(_model.BaseModel):
                 "loss_total": base_loss_mean,
                 "loss_base_flow": base_loss_mean,
             }
-        if self.origami_vla_config.disable_auxiliary_losses:
+        if self.origami_vla_config.disable_auxiliary_losses or self.origami_vla_config.action_mode != "spline":
             zero = jnp.asarray(0.0, dtype=base_loss.dtype)
             return base_loss, {
                 "loss": base_loss_mean,

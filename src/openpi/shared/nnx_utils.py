@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import dataclasses
 import functools
 import inspect
@@ -67,3 +67,36 @@ def state_map(state: nnx.State, filter: nnx.filterlib.Filter, fn: Callable[[Any]
     """Apply a function to the leaves of the state that match the filter."""
     filtered_keys = set(state.filter(filter).flat_state())
     return state.map(lambda k, v: fn(v) if k in filtered_keys else v)
+
+
+def scale_update_leaf(update: Any, multiplier: float) -> Any:
+    """Scale either a raw update array or an NNX variable wrapper."""
+    if multiplier == 1.0:
+        return update
+    if hasattr(update, "value") and hasattr(update, "replace"):
+        return update.replace(update.value * multiplier)
+    return update * multiplier
+
+
+def scale_state_updates_by_path(
+    state: nnx.State,
+    path_multipliers: Sequence[tuple[str, float]],
+) -> nnx.State:
+    """Scale optimizer updates by regex-matched parameter path.
+
+    Later rules override earlier rules, so specific module paths can refine broad
+    module-level multipliers.
+    """
+    if not path_multipliers:
+        return state
+
+    rules = [(PathRegex(pattern), float(multiplier)) for pattern, multiplier in path_multipliers]
+
+    def scale(path: nnx.filterlib.PathParts, update: Any) -> Any:
+        multiplier = 1.0
+        for path_filter, rule_multiplier in rules:
+            if path_filter(path, update):
+                multiplier = rule_multiplier
+        return scale_update_leaf(update, multiplier)
+
+    return state.map(scale)

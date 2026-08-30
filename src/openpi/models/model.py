@@ -67,6 +67,10 @@ IMAGE_RESOLUTION = (224, 224)
 #     "action_mask": bool[*b, ah, ad],  # Optional, loss mask for continuous action dimensions
 #     "sample_weight": float32[*b],  # Optional, per-sample training weight
 #     "tactile": float32[*b, 60],  # Optional, low-dimensional tactile wrench vector
+#     "planner_available": bool[*b],  # Optional, masks checkpoint-planner prefix tokens when absent
+#     "tactile_deform_images": uint8|float32[*b, 10, 3, 224, 224],  # Optional tactile image crops
+#     "tactile_raw_images": uint8|float32[*b, 10, 3, 224, 224],  # Optional tactile image crops
+#     "tactile_raw_available": bool[*b],  # Optional raw tactile image availability mask
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
 #     "tokenized_prompt_mask": bool[*b, l],  # Optional, mask for tokenized prompt
 #     "token_ar_mask": int32[*b, l],  # Optional, autoregressive mask for FAST model
@@ -116,8 +120,13 @@ class Observation(Generic[ArrayT]):
     planner_progress_transition: at.Float[ArrayT, "*b p"] | None = None
     planner_uncertainty: at.Float[ArrayT, "*b u"] | None = None
     planner_history_latent: at.Float[ArrayT, "*b hist"] | None = None
+    planner_available: at.Bool[ArrayT, "*b"] | None = None
     # Optional tactile wrench observation used by Origami VLA variants.
     tactile: at.Float[ArrayT, "*b tactile"] | None = None
+    # Optional tactile image crops used by FTP/SharpaWave tactile prefix variants.
+    tactile_deform_images: at.Array | None = None
+    tactile_raw_images: at.Array | None = None
+    tactile_raw_available: at.Bool[ArrayT, "*b"] | None = None
 
     # Tokenized prompt.
     tokenized_prompt: at.Int[ArrayT, "*b l"] | None = None
@@ -160,7 +169,11 @@ class Observation(Generic[ArrayT]):
             planner_progress_transition=data.get("planner_progress_transition"),
             planner_uncertainty=data.get("planner_uncertainty"),
             planner_history_latent=data.get("planner_history_latent"),
+            planner_available=data.get("planner_available"),
             tactile=data.get("tactile"),
+            tactile_deform_images=data.get("tactile_deform_images"),
+            tactile_raw_images=data.get("tactile_raw_images"),
+            tactile_raw_available=data.get("tactile_raw_available"),
             tokenized_prompt=data.get("tokenized_prompt"),
             tokenized_prompt_mask=data.get("tokenized_prompt_mask"),
             token_ar_mask=data.get("token_ar_mask"),
@@ -251,7 +264,11 @@ def preprocess_observation(
         planner_progress_transition=observation.planner_progress_transition,
         planner_uncertainty=observation.planner_uncertainty,
         planner_history_latent=observation.planner_history_latent,
+        planner_available=observation.planner_available,
         tactile=observation.tactile,
+        tactile_deform_images=observation.tactile_deform_images,
+        tactile_raw_images=observation.tactile_raw_images,
+        tactile_raw_available=observation.tactile_raw_available,
         tokenized_prompt=observation.tokenized_prompt,
         tokenized_prompt_mask=observation.tokenized_prompt_mask,
         token_ar_mask=observation.token_ar_mask,
@@ -419,7 +436,10 @@ def restore_params(
 
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
-        item = {"params": metadata["params"]}
+        if isinstance(metadata, dict):
+            item = {"params": metadata["params"]}
+        else:
+            item = {"params": metadata.item_metadata.tree["params"]}
 
         params = ckptr.restore(
             params_path,

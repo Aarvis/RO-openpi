@@ -126,6 +126,13 @@ class GroupFactory(Protocol):
 
 
 @dataclasses.dataclass(frozen=True)
+class NoOpTransformFactory(GroupFactory):
+    def __call__(self, model_config: _model.BaseModelConfig) -> _transforms.Group:
+        del model_config
+        return _transforms.Group()
+
+
+@dataclasses.dataclass(frozen=True)
 class ModelTransformFactory(GroupFactory):
     """Creates model transforms for standard pi0 models."""
 
@@ -163,6 +170,8 @@ class ModelTransformFactory(GroupFactory):
                         _transforms.TokenizePrompt(
                             _tokenizer.PaligemmaTokenizer(model_config.max_token_len),
                             discrete_state_input=model_config.discrete_state_input,
+                            discrete_tactile_input=model_config.origami_vla.tactile_prompt_input,
+                            clip_discrete_inputs=model_config.origami_vla.prompt_discrete_clip,
                         ),
                         _transforms.PadStatesAndActions(model_config.action_dim),
                     ],
@@ -259,7 +268,7 @@ class FakeDataConfig(DataConfigFactory):
 @dataclasses.dataclass(frozen=True)
 class SimpleDataConfig(DataConfigFactory):
     # Factory for the data transforms.
-    data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=GroupFactory)
+    data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=NoOpTransformFactory)
     # Factory for the model transforms.
     model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
 
@@ -278,8 +287,14 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     manifest_root: str = "D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1"
     prompt: str = "fold paper into airplane"
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
+    action_source: Literal["spline", "action_chunk"] = "spline"
+    action_filename: str = "action_65d.npy"
+    action_chunk_stride: int = 1
+    drop_horizon_clipped: bool = False
     planner_arrays_filename: str = "planner_vla_rollout_features.npz"
     planner_index_filename: str = "planner_vla_rollout_index.parquet"
+    planner_branch: str = "alias"
+    planner_value_variant: Literal["final", "raw"] = "final"
     tactile_filename: str = "tactile_60d.npy"
     sample_weight_column: str = "sample_weight"
     require_sample_weight: bool = False
@@ -303,23 +318,59 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
         }
     )
+    load_tactile_images: bool = False
+    tactile_deform_video: str = "videos/tactile_deform.mp4"
+    tactile_raw_video: str = "videos/tactile_raw.mp4"
+    tactile_require_raw_video: bool = False
+    tactile_image_size: int = 224
+    tactile_raw_input_dropout_prob: float = 0.0
+    tactile_raw_dropout_seed: int = 1234
+    tactile_raw_grid: dict[str, Any] = dataclasses.field(
+        default_factory=lambda: {
+            "rows": 2,
+            "cols": 5,
+            "expected_width": 1600,
+            "expected_height": 480,
+            "resize_mode": "resize",
+        }
+    )
+    tactile_deform_grid: dict[str, Any] = dataclasses.field(
+        default_factory=lambda: {
+            "rows": 2,
+            "cols": 5,
+            "expected_width": 1200,
+            "expected_height": 480,
+            "resize_mode": "resize",
+        }
+    )
+    include_planner_features: bool = True
+    data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=NoOpTransformFactory)
     model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         if not isinstance(model_config, pi0_config.Pi0Config):
             raise TypeError("Origami VLA config currently expects a Pi0Config model.")
-        if not model_config.origami_vla.enabled:
-            raise ValueError("Origami VLA data config requires model.origami_vla.enabled=True.")
+        if not model_config.origami_vla.enabled and self.action_source != "action_chunk":
+            raise ValueError("Spline Origami VLA data config requires model.origami_vla.enabled=True.")
 
         settings = _origami_vla_dataset.OrigamiVlaSettings(
             dataset_root=self.dataset_root,
             manifest_root=self.manifest_root,
             local_target_npz_name=self.local_target_npz_name,
+            action_source=self.action_source,
+            action_filename=self.action_filename,
+            action_chunk_stride=self.action_chunk_stride,
+            drop_horizon_clipped=self.drop_horizon_clipped,
             planner_arrays_filename=self.planner_arrays_filename,
             planner_index_filename=self.planner_index_filename,
+            planner_branch=self.planner_branch,
+            planner_value_variant=self.planner_value_variant,
+            planner_belief_dim=model_config.origami_vla.belief_dim,
+            planner_history_dim=model_config.origami_vla.history_dim,
             tactile_filename=self.tactile_filename,
             max_control_points=model_config.origami_vla.max_control_points,
+            action_horizon=model_config.action_horizon,
             max_span_count=model_config.origami_vla.max_span_count,
             degree=model_config.origami_vla.degree,
             state_dim=int(model_config.state_dim or model_config.action_dim),
@@ -332,15 +383,36 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             image_modalities=dict(self.image_modalities),
             frame_cache_root_relpath=self.frame_cache_root_relpath,
             frame_cache_modalities=dict(self.frame_cache_modalities),
+            load_tactile_images=self.load_tactile_images or model_config.origami_vla.ftp_tactile_enabled,
+            tactile_deform_video=self.tactile_deform_video,
+            tactile_raw_video=self.tactile_raw_video,
+            tactile_require_raw_video=self.tactile_require_raw_video,
+            tactile_image_size=self.tactile_image_size,
+            tactile_raw_input_dropout_prob=self.tactile_raw_input_dropout_prob,
+            tactile_raw_dropout_seed=self.tactile_raw_dropout_seed,
+            tactile_raw_grid=dict(self.tactile_raw_grid),
+            tactile_deform_grid=dict(self.tactile_deform_grid),
+            include_planner_features=self.include_planner_features,
             fail_on_missing_modalities=self.fail_on_missing_modalities,
             max_rows=self.max_rows,
         )
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
+            data_transforms=self.data_transforms(model_config),
             model_transforms=self.model_transforms(model_config),
             origami_vla=settings,
             dataset_split="train",
         )
+
+
+@dataclasses.dataclass(frozen=True)
+class OrigamiCompActionChunkDataConfig(OrigamiVlaDataConfig):
+    action_source: Literal["spline", "action_chunk"] = "action_chunk"
+    local_target_npz_name: str = ""
+    action_filename: str = "action_65d.npy"
+    action_chunk_stride: int = 1
+    drop_horizon_clipped: bool = True
+    include_planner_features: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1098,6 +1170,18 @@ class LehomePPOPolicyConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class ParamLrMultiplier:
+    regex: str
+    multiplier: float
+
+    def __post_init__(self) -> None:
+        if not self.regex:
+            raise ValueError("ParamLrMultiplier.regex must be non-empty.")
+        if self.multiplier <= 0.0:
+            raise ValueError(f"ParamLrMultiplier.multiplier must be positive, got {self.multiplier}.")
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
@@ -1128,6 +1212,9 @@ class TrainConfig:
     # by this value. For example, adapter LR 5e-5 and VLA LR 5e-6 => 0.1.
     non_adapter_lr_multiplier: float | None = None
     adapter_param_regex: str = ".*future_latent_adapter.*"
+    # Optional base-LR anchored update scaling. The configured lr_schedule remains
+    # the base model LR, and matching parameter paths receive base_lr * multiplier.
+    param_lr_multipliers: tuple[ParamLrMultiplier, ...] = ()
 
     # Specifies which weights should be frozen.
     freeze_filter: tyro.conf.Suppress[Filter] = dataclasses.field(default_factory=nnx.Nothing)
@@ -1253,6 +1340,8 @@ class TrainConfig:
             raise ValueError("Cannot resume and overwrite at the same time.")
         if self.run_val and not self.val_repo_id:
             raise ValueError("--val_repo_id must be set when --run_val is true.")
+        if self.non_adapter_lr_multiplier is not None and self.param_lr_multipliers:
+            raise ValueError("Use either non_adapter_lr_multiplier or param_lr_multipliers, not both.")
         if self.checkpoint_strategy == "best_val" and not self.run_val:
             raise ValueError("--run_val must be true when --checkpoint_strategy is best_val.")
         if self.val_frequency <= 0:
@@ -2378,6 +2467,150 @@ _CONFIGS = [
         log_interval=100,
         run_val=True,
         val_repo_id="local/origami_sampled_vla",
+        val_frequency=2_000,
+        val_batch_size=32,
+        checkpoint_strategy="manual",
+        save_interval=5_000,
+        keep_period=10_000,
+        max_to_keep=3,
+    ),
+    TrainConfig(
+        name="pi05_origami_comp_action_chunk",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=65,
+            state_dim=65,
+            action_horizon=10,
+            # Re-measure with scripts/scan_origami_comp_prompt_token_lengths.py after norm stats are computed.
+            max_token_len=768,
+            discrete_state_input=True,
+            image_keys=("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb"),
+            origami_vla=pi0_config.OrigamiVlaConfig(
+                enabled=True,
+                action_mode="action_chunk",
+                disable_auxiliary_losses=True,
+                episode_execution_speed_preference=True,
+                use_speed_efficiency_weight=True,
+                normalize_speed_efficiency_weighted_loss=True,
+                speed_efficiency_weight_eps=1.0e-6,
+                belief_dim=29,
+                history_dim=512,
+                tactile_dim=60,
+                tactile_prompt_input=True,
+                prompt_discrete_clip=True,
+                tactile_enabled=False,
+                ftp_tactile_enabled=True,
+                ftp_tactile_branch="auto",
+                ftp_tactile_image_size=224,
+                ftp_tactile_patch_size=16,
+                ftp_tactile_width=768,
+                ftp_tactile_depth=3,
+                ftp_tactile_heads=12,
+                ftp_tactile_mlp_ratio=4,
+                ftp_tactile_backbone_micro_batch=64,
+                ftp_tactile_freeze_backbone=True,
+                ftp_tactile_include_cls_token=True,
+                ftp_tactile_normalize_images=True,
+                ftp_tactile_adapter_dim=512,
+                ftp_tactile_prefix_dim=2048,
+                ftp_tactile_tokens_per_finger=4,
+                ftp_tactile_hands=2,
+                ftp_tactile_fingers_per_hand=5,
+                ftp_tactile_resampler_layers=2,
+                ftp_tactile_resampler_heads=8,
+                ftp_tactile_resampler_ffn_dim=2048,
+                ftp_tactile_cross_finger_layers=4,
+                ftp_tactile_cross_finger_heads=8,
+                ftp_tactile_cross_finger_ffn_dim=2048,
+                ftp_tactile_dropout=0.1,
+                ftp_tactile_rope_enabled=True,
+            ),
+        ),
+        data=OrigamiCompActionChunkDataConfig(
+            repo_id="local/origami_comp_action_chunk",
+            assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk"),
+            dataset_root="E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset",
+            manifest_root=(
+                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner"
+            ),
+            prompt="fold paper into airplane",
+            planner_branch="posterior",
+            planner_value_variant="final",
+            tactile_filename="tactile_60d.npy",
+            load_tactile_images=True,
+            tactile_deform_video="videos/tactile_deform.mp4",
+            tactile_raw_video="videos/tactile_raw.mp4",
+            tactile_require_raw_video=False,
+            tactile_image_size=224,
+            tactile_raw_input_dropout_prob=0.5,
+            tactile_raw_dropout_seed=1234,
+            sample_weight_column="sample_weight",
+            require_sample_weight=True,
+            image_source_type="video",
+            image_modalities={
+                "base_0_rgb": "videos/head_left.mp4",
+                "left_wrist_0_rgb": "videos/wrist_left.mp4",
+                "right_wrist_0_rgb": "videos/wrist_right.mp4",
+            },
+            frame_cache_modalities={
+                "base_0_rgb": "base_0_rgb_224x224_uint8.npy",
+                "left_wrist_0_rgb": "left_wrist_0_rgb_224x224_uint8.npy",
+                "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
+            },
+            include_planner_features=True,
+            data_transforms=lambda model: _transforms.Group(
+                inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(65))],
+                outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(65))],
+            ),
+        ),
+        weight_loader=weight_loaders.CompositeWeightLoader(
+            loaders=(
+                weight_loaders.CheckpointWeightLoader(
+                    "gs://openpi-assets/checkpoints/pi05_base/params",
+                    missing_regex=(
+                        ".*(lora|origami_planner_adapter|origami_ftp_tactile_prefix_encoder|"
+                        "action_in_proj|action_out_proj).*"
+                    ),
+                ),
+                weight_loaders.NpzSubsetWeightLoader(
+                    (
+                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/"
+                        "openpi_origami_planner_adapter_prefixed_params.npz"
+                    ),
+                    strict=True,
+                ),
+                weight_loaders.OrbaxSubsetWeightLoader(
+                    (
+                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
+                    ),
+                    key_prefix="origami_ftp_tactile_prefix_encoder",
+                    strict=True,
+                ),
+            ),
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=2e-4,
+            decay_steps=60_000,
+            decay_lr=2e-6,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        freeze_filter=nnx_utils.PathRegex(".*origami_ftp_tactile_prefix_encoder/backbone/.*"),
+        param_lr_multipliers=(
+            ParamLrMultiplier(regex=".*origami_planner_adapter.*", multiplier=3.0),
+            ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder.*", multiplier=1.5),
+            ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
+        ),
+        batch_size=32,
+        num_workers=8,
+        num_train_steps=60_000,
+        log_interval=100,
+        run_val=False,
+        val_repo_id=None,
         val_frequency=2_000,
         val_batch_size=32,
         checkpoint_strategy="manual",

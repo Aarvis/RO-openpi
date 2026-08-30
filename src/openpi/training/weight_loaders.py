@@ -35,6 +35,19 @@ class NoOpWeightLoader(WeightLoader):
 
 
 @dataclasses.dataclass(frozen=True)
+class CompositeWeightLoader(WeightLoader):
+    """Applies multiple weight loaders in sequence."""
+
+    loaders: tuple[WeightLoader, ...]
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded = params
+        for loader in self.loaders:
+            loaded = loader.load(loaded)
+        return loaded
+
+
+@dataclasses.dataclass(frozen=True)
 class CheckpointWeightLoader(WeightLoader):
     """Loads an entire set of weights from a checkpoint.
 
@@ -53,6 +66,61 @@ class CheckpointWeightLoader(WeightLoader):
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
         # Add explicitly allowed missing weights from the freshly initialized reference tree.
         return _merge_params(loaded_params, params, missing_regex=self.missing_regex)
+
+
+@dataclasses.dataclass(frozen=True)
+class NpzSubsetWeightLoader(WeightLoader):
+    """Loads named parameters from a flat Flax/Linen `.npz` file into an initialized tree."""
+
+    params_path: str
+    key_prefix: str | None = None
+    strict: bool = True
+    min_matched: int = 1
+
+    def load(self, params: at.Params) -> at.Params:
+        path = download.maybe_download(self.params_path)
+        with path.open("rb") as f:
+            flat_params = dict(np.load(f, allow_pickle=False))
+
+        if self.key_prefix:
+            prefix = self.key_prefix.strip("/")
+            flat_params = {f"{prefix}/{key}": value for key, value in flat_params.items()}
+
+        loaded_params = flax.traverse_util.unflatten_dict(flat_params, sep="/")
+        return _merge_subset_params(
+            loaded_params,
+            params,
+            strict=self.strict,
+            min_matched=self.min_matched,
+            source=str(path),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class OrbaxSubsetWeightLoader(WeightLoader):
+    """Loads a nested OpenPI/Orbax params tree into an initialized model subtree."""
+
+    params_path: str
+    key_prefix: str | None = None
+    strict: bool = True
+    min_matched: int = 1
+
+    def load(self, params: at.Params) -> at.Params:
+        loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
+        if self.key_prefix:
+            prefix = self.key_prefix.strip("/")
+            flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+            loaded_params = flax.traverse_util.unflatten_dict(
+                {f"{prefix}/{key}": value for key, value in flat_loaded.items()},
+                sep="/",
+            )
+        return _merge_subset_params(
+            loaded_params,
+            params,
+            strict=self.strict,
+            min_matched=self.min_matched,
+            source=str(self.params_path),
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -120,4 +188,49 @@ def _merge_params(loaded_params: at.Params, params: at.Params, *, missing_regex:
         if k not in result:
             result[k] = flat_ref[k]
 
+    return flax.traverse_util.unflatten_dict(result, sep="/")
+
+
+def _merge_subset_params(
+    loaded_params: at.Params,
+    params: at.Params,
+    *,
+    strict: bool,
+    min_matched: int,
+    source: str,
+) -> at.Params:
+    """Overwrites a strict subset of a reference tree with loaded arrays."""
+    flat_ref = flax.traverse_util.flatten_dict(params, sep="/")
+    flat_loaded = flax.traverse_util.flatten_dict(loaded_params, sep="/")
+    result = dict(flat_ref)
+    unexpected: list[str] = []
+    matched = 0
+
+    for key, value in flat_loaded.items():
+        if key not in flat_ref:
+            unexpected.append(key)
+            continue
+
+        ref_value = flat_ref[key]
+        loaded_shape = tuple(value.shape) if hasattr(value, "shape") else None
+        ref_shape = tuple(ref_value.shape) if hasattr(ref_value, "shape") else None
+        if loaded_shape is not None and ref_shape is not None and loaded_shape != ref_shape:
+            raise ValueError(
+                f"Loaded parameter shape mismatch for {key}: source={loaded_shape} model={ref_shape}"
+            )
+
+        ref_dtype = getattr(ref_value, "dtype", None)
+        if ref_dtype is not None and hasattr(value, "dtype") and value.dtype != ref_dtype:
+            value = value.astype(ref_dtype)
+        result[key] = value
+        matched += 1
+
+    if strict and unexpected:
+        preview = ", ".join(unexpected[:20])
+        suffix = "" if len(unexpected) <= 20 else f", ... and {len(unexpected) - 20} more"
+        raise KeyError(f"{source} contains parameters that are not present in the model: {preview}{suffix}")
+    if matched < min_matched:
+        raise RuntimeError(f"Loaded only {matched} matching parameters from {source}; expected at least {min_matched}.")
+
+    logger.info("Loaded %d parameter arrays from %s", matched, source)
     return flax.traverse_util.unflatten_dict(result, sep="/")

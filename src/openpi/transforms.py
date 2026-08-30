@@ -434,6 +434,10 @@ class AbsoluteActions(DataTransformFn):
 class TokenizePrompt(DataTransformFn):
     tokenizer: _tokenizer.PaligemmaTokenizer
     discrete_state_input: bool = False
+    discrete_tactile_input: bool = False
+    tactile_key: str = "tactile_prompt"
+    tactile_mask_key: str = "tactile_prompt_mask"
+    clip_discrete_inputs: bool = False
 
     def __call__(self, data: DataDict) -> DataDict:
         if (prompt := data.pop("prompt", None)) is None:
@@ -447,10 +451,25 @@ class TokenizePrompt(DataTransformFn):
             state = None
             state_mask = None
 
+        if self.discrete_tactile_input:
+            if (tactile := data.get(self.tactile_key, None)) is None:
+                raise ValueError(f"Tactile prompt input is required at key {self.tactile_key!r}.")
+            tactile_mask = data.get(self.tactile_mask_key)
+        else:
+            tactile = None
+            tactile_mask = None
+
         if not isinstance(prompt, str):
             prompt = prompt.item()
 
-        tokens, token_masks = self.tokenizer.tokenize(prompt, state, state_mask)
+        tokens, token_masks = self.tokenizer.tokenize(
+            prompt,
+            state,
+            state_mask,
+            tactile,
+            tactile_mask,
+            clip_discrete_inputs=self.clip_discrete_inputs,
+        )
         return {**data, "tokenized_prompt": tokens, "tokenized_prompt_mask": token_masks}
 
 

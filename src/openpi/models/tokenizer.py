@@ -19,35 +19,80 @@ class PaligemmaTokenizer:
         with path.open("rb") as f:
             self._tokenizer = sentencepiece.SentencePieceProcessor(model_proto=f.read())
 
+    @staticmethod
+    def _discretize_normalized_values(values: np.ndarray, *, clip: bool = False) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float32).reshape(-1)
+        if clip:
+            values = np.clip(values, -1.0, 1.0)
+        return np.digitize(values, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
+
+    def _serialize_discrete_vector(
+        self,
+        label: str,
+        mask_label: str,
+        values: np.ndarray,
+        value_mask: np.ndarray | None = None,
+        *,
+        clip: bool = False,
+    ) -> str:
+        values = np.asarray(values, dtype=np.float32).reshape(-1)
+        if value_mask is None:
+            value_mask = np.ones_like(values, dtype=bool)
+        else:
+            value_mask = np.asarray(value_mask, dtype=bool).reshape(-1)
+            if value_mask.shape != values.shape:
+                raise ValueError(f"{mask_label} shape {value_mask.shape} must match {label} shape {values.shape}")
+
+        discretized = self._discretize_normalized_values(values, clip=clip)
+        value_tokens = [
+            str(value) if is_valid else "MISSING"
+            for value, is_valid in zip(discretized, value_mask, strict=True)
+        ]
+        mask_tokens = ["1" if is_valid else "0" for is_valid in value_mask]
+        return f"{label}: {' '.join(value_tokens)}; {mask_label}: {' '.join(mask_tokens)};"
+
     def _serialize_state(
         self,
         state: np.ndarray,
         state_mask: np.ndarray | None = None,
+        *,
+        clip: bool = False,
     ) -> str:
-        state = np.asarray(state, dtype=np.float32).reshape(-1)
-        if state_mask is None:
-            state_mask = np.ones_like(state, dtype=bool)
-        else:
-            state_mask = np.asarray(state_mask, dtype=bool).reshape(-1)
-            if state_mask.shape != state.shape:
-                raise ValueError(f"state_mask shape {state_mask.shape} must match state shape {state.shape}")
+        return self._serialize_discrete_vector("State", "StateMask", state, state_mask, clip=clip)
 
-        discretized_state = np.digitize(state, bins=np.linspace(-1, 1, 256 + 1)[:-1]) - 1
-        state_tokens = [str(value) if is_valid else "MISSING" for value, is_valid in zip(discretized_state, state_mask, strict=True)]
-        state_mask_tokens = ["1" if is_valid else "0" for is_valid in state_mask]
-        return f"State: {' '.join(state_tokens)}; StateMask: {' '.join(state_mask_tokens)};"
+    def _serialize_tactile(
+        self,
+        tactile: np.ndarray,
+        tactile_mask: np.ndarray | None = None,
+        *,
+        clip: bool = False,
+    ) -> str:
+        return self._serialize_discrete_vector("Tactile", "TactileMask", tactile, tactile_mask, clip=clip)
 
     def tokenize(
         self,
         prompt: str,
         state: np.ndarray | None = None,
         state_mask: np.ndarray | None = None,
+        tactile: np.ndarray | None = None,
+        tactile_mask: np.ndarray | None = None,
+        *,
+        clip_discrete_inputs: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         cleaned_text = prompt.strip().replace("_", " ").replace("\n", " ")
-        if state is not None:
-            # This is the Pi05 format, where the state is part of the discrete language input.
-            state_str = self._serialize_state(state, state_mask)
-            full_prompt = f"Task: {cleaned_text}, {state_str}\nAction: "
+        if state is not None or tactile is not None:
+            # This is the Pi05 format, where compact numeric observations are part of the discrete language input.
+            observation_parts = []
+            if state is not None:
+                observation_parts.append(
+                    self._serialize_state(state, state_mask, clip=clip_discrete_inputs)
+                )
+            if tactile is not None:
+                observation_parts.append(
+                    self._serialize_tactile(tactile, tactile_mask, clip=clip_discrete_inputs)
+                )
+            observation_str = " ".join(observation_parts)
+            full_prompt = f"Task: {cleaned_text}, {observation_str}\nAction: "
             tokens = self._tokenizer.encode(full_prompt, add_bos=True)
         else:
             # This is the Pi0 format, where the state is part of the continuous action expert input.
