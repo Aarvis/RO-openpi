@@ -3,14 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SRC_DIR = SCRIPT_DIR.parent / "src"
 
-def parse_args() -> argparse.Namespace:
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         description=(
             "Verify an Origami pi0.5 comp action-chunk manifest before VLA training. "
@@ -18,7 +23,13 @@ def parse_args() -> argparse.Namespace:
             "coverage, and planner rollout export pointers."
         )
     )
-    parser.add_argument("--manifest-root", type=Path, required=True)
+    parser.add_argument(
+        "--config-name",
+        type=str,
+        default=None,
+        help="Optional OpenPI training config name to use as the manifest-verifier source of truth.",
+    )
+    parser.add_argument("--manifest-root", type=Path, default=None)
     parser.add_argument("--dataset-root", type=Path, default=None)
     parser.add_argument("--train-index-name", type=str, default="train_index.parquet")
     parser.add_argument("--val-index-name", type=str, default="val_index.parquet")
@@ -39,7 +50,86 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--planner-progress-dim", type=int, default=2)
     parser.add_argument("--planner-uncertainty-dim", type=int, default=3)
     parser.add_argument("--planner-history-dim", type=int, default=512)
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    args._explicit_flags = {arg.split("=", 1)[0] for arg in raw_args if arg.startswith("--")}
+    return args
+
+
+def _cli_flag_supplied(args: argparse.Namespace, *flags: str) -> bool:
+    explicit_flags = getattr(args, "_explicit_flags", set())
+    return any(flag in explicit_flags for flag in flags)
+
+
+def _probability_map_cli_values(values: dict[str, float]) -> list[str] | None:
+    if not values:
+        return None
+    return [f"{key}={float(weight)}" for key, weight in values.items()]
+
+
+def _resolve_args_from_config(args: argparse.Namespace) -> argparse.Namespace:
+    if args.config_name is None:
+        return args
+
+    if str(SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(SRC_DIR))
+    import openpi.training.config as train_config
+
+    config = train_config.get_config(str(args.config_name))
+    data_config = config.data
+    if not isinstance(data_config, train_config.OrigamiCompActionChunkDataConfig):
+        raise TypeError(
+            f"Config {args.config_name!r} uses {type(data_config).__name__}; "
+            "expected OrigamiCompActionChunkDataConfig."
+        )
+    build_config = data_config.manifest_build
+    origami_vla = config.model.origami_vla
+
+    def set_if_config(attr: str, value: Any, *flags: str) -> None:
+        if not _cli_flag_supplied(args, *flags):
+            setattr(args, attr, value)
+
+    set_if_config("manifest_root", Path(data_config.manifest_root), "--manifest-root")
+    set_if_config("dataset_root", Path(data_config.dataset_root), "--dataset-root")
+    set_if_config("train_index_name", str(build_config.train_index_name), "--train-index-name")
+    set_if_config("val_index_name", str(build_config.val_index_name), "--val-index-name")
+    set_if_config("planner_arrays_name", str(build_config.planner_arrays_name), "--planner-arrays-name")
+    set_if_config("planner_index_name", str(build_config.planner_index_name), "--planner-index-name")
+    set_if_config(
+        "planner_complete_marker_name",
+        str(build_config.planner_complete_marker_name),
+        "--planner-complete-marker-name",
+    )
+    set_if_config(
+        "require_planner_complete_marker",
+        bool(build_config.require_planner_complete_marker),
+        "--require-planner-complete-marker",
+        "--no-require-planner-complete-marker",
+    )
+    if build_config.planner_export_root and build_config.planner_assignment_mode == "episode_sampled":
+        set_if_config(
+            "expect_planner_enabled_ratio",
+            1.0 - float(build_config.planner_dropout_episode_prob),
+            "--expect-planner-enabled-ratio",
+        )
+        set_if_config(
+            "expect_view_mode_probs",
+            _probability_map_cli_values(build_config.planner_view_mode_probs),
+            "--expect-view-mode-probs",
+        )
+        set_if_config(
+            "expect_branch_probs",
+            _probability_map_cli_values(build_config.planner_branch_probs),
+            "--expect-branch-probs",
+        )
+    set_if_config(
+        "expect_planner_value_variant",
+        str(build_config.planner_value_variant),
+        "--expect-planner-value-variant",
+    )
+    set_if_config("expect_val_episodes", int(build_config.num_val_episodes), "--expect-val-episodes")
+    set_if_config("planner_belief_dim", int(origami_vla.belief_dim), "--planner-belief-dim")
+    set_if_config("planner_history_dim", int(origami_vla.history_dim), "--planner-history-dim")
+    return args
 
 
 def _load_manifest(manifest_root: Path) -> dict[str, Any]:
@@ -305,14 +395,20 @@ def _summarize_assignments(split_name: str, frame: pd.DataFrame, failures: list[
 
 
 def main() -> int:
-    args = parse_args()
-    manifest = _load_manifest(args.manifest_root)
+    args = _resolve_args_from_config(parse_args())
+    if args.manifest_root is None:
+        raise ValueError("--manifest-root is required unless it is supplied by --config-name.")
+
+    manifest_root = Path(args.manifest_root)
+    manifest = _load_manifest(manifest_root)
     dataset_root = args.dataset_root
     if dataset_root is None:
         dataset_root = Path(manifest["dataset_root"])
+    else:
+        dataset_root = Path(dataset_root)
 
-    train_frame = _load_split_frame(args.manifest_root, args.train_index_name)
-    val_frame = _load_split_frame(args.manifest_root, args.val_index_name)
+    train_frame = _load_split_frame(manifest_root, args.train_index_name)
+    val_frame = _load_split_frame(manifest_root, args.val_index_name)
     failures: list[str] = []
 
     train_episodes = _split_episode_uids(train_frame)
@@ -323,7 +419,8 @@ def main() -> int:
         _check(len(val_episodes) == args.expect_val_episodes, f"val episodes={len(val_episodes)}, expected {args.expect_val_episodes}", failures)
 
     print("Origami comp action-chunk manifest verification")
-    print(f"manifest_root: {args.manifest_root}")
+    print(f"config_name  : {args.config_name}")
+    print(f"manifest_root: {manifest_root}")
     print(f"dataset_root : {dataset_root}")
     _summarize_assignments("train", train_frame, failures)
     _summarize_assignments("val", val_frame, failures)

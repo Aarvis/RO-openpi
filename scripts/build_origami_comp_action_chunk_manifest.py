@@ -4,22 +4,33 @@ import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+SRC_DIR = SCRIPT_DIR.parent / "src"
 
-def parse_args() -> argparse.Namespace:
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    raw_args = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(
         description=(
             "Build OpenPI train/val manifests for Origami pi0.5 direct action-chunk training. "
             "Rows point at current frame positions; the dataset loader builds action_65d chunks on demand."
         )
     )
-    parser.add_argument("--dataset-root", type=Path, required=True)
-    parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--config-name",
+        type=str,
+        default=None,
+        help="Optional OpenPI training config name to use as the manifest-builder source of truth.",
+    )
+    parser.add_argument("--dataset-root", type=Path, default=None)
+    parser.add_argument("--output-root", type=Path, default=None)
     parser.add_argument(
         "--checkpoint-planner-manifest-root",
         type=Path,
@@ -28,7 +39,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ignore-checkpoint-planner-split",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
             "Do not reuse the train/val split from --checkpoint-planner-manifest-root. "
             "Use this when checkpoint-planner exports are used as features but VLA training "
@@ -48,7 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-chunk-stride", type=int, default=1)
     parser.add_argument(
         "--keep-horizon-clipped",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Keep tail frames that do not have a complete future action chunk. By default they are dropped.",
     )
     parser.add_argument(
@@ -172,7 +185,143 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--train-index-name", type=str, default="train_index.parquet")
     parser.add_argument("--val-index-name", type=str, default="val_index.parquet")
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+    args._explicit_flags = {arg.split("=", 1)[0] for arg in raw_args if arg.startswith("--")}
+    return args
+
+
+def _cli_flag_supplied(args: argparse.Namespace, *flags: str) -> bool:
+    explicit_flags = getattr(args, "_explicit_flags", set())
+    return any(flag in explicit_flags for flag in flags)
+
+
+def _path_or_none(value: Any) -> Path | None:
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    return Path(text)
+
+
+def _csv(values: tuple[str, ...] | list[str]) -> str:
+    return ",".join(str(value) for value in values if str(value).strip())
+
+
+def _probability_map_cli_values(values: dict[str, float]) -> list[str] | None:
+    if not values:
+        return None
+    return [f"{key}={float(weight)}" for key, weight in values.items()]
+
+
+def _resolve_args_from_config(args: argparse.Namespace) -> argparse.Namespace:
+    if args.config_name is None:
+        return args
+
+    if str(SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(SRC_DIR))
+    import openpi.training.config as train_config
+
+    config = train_config.get_config(str(args.config_name))
+    data_config = config.data
+    if not isinstance(data_config, train_config.OrigamiCompActionChunkDataConfig):
+        raise TypeError(
+            f"Config {args.config_name!r} uses {type(data_config).__name__}; "
+            "expected OrigamiCompActionChunkDataConfig."
+        )
+    build_config = data_config.manifest_build
+
+    def set_if_config(attr: str, value: Any, *flags: str) -> None:
+        if not _cli_flag_supplied(args, *flags):
+            setattr(args, attr, value)
+
+    set_if_config("dataset_root", Path(data_config.dataset_root), "--dataset-root")
+    set_if_config("output_root", Path(data_config.manifest_root), "--output-root")
+    set_if_config(
+        "checkpoint_planner_manifest_root",
+        _path_or_none(build_config.checkpoint_planner_manifest_root),
+        "--checkpoint-planner-manifest-root",
+    )
+    set_if_config(
+        "ignore_checkpoint_planner_split",
+        bool(build_config.ignore_checkpoint_planner_split),
+        "--ignore-checkpoint-planner-split",
+        "--no-ignore-checkpoint-planner-split",
+    )
+    set_if_config("num_val_episodes", int(build_config.num_val_episodes), "--num-val-episodes")
+    set_if_config("val_seed", int(build_config.val_seed), "--val-seed")
+    set_if_config("val_episode_uids", _csv(build_config.val_episode_uids), "--val-episode-uids")
+    set_if_config("frame_stride", int(build_config.frame_stride), "--frame-stride")
+    set_if_config("action_horizon", int(config.model.action_horizon), "--action-horizon")
+    set_if_config("action_chunk_stride", int(data_config.action_chunk_stride), "--action-chunk-stride")
+    set_if_config(
+        "keep_horizon_clipped",
+        bool(build_config.keep_horizon_clipped),
+        "--keep-horizon-clipped",
+        "--no-keep-horizon-clipped",
+    )
+    set_if_config("planner_export_root", _path_or_none(build_config.planner_export_root), "--planner-export-root")
+    set_if_config("planner_assignment_mode", str(build_config.planner_assignment_mode), "--planner-assignment-mode")
+    set_if_config(
+        "train_planner_view_modes",
+        list(build_config.train_planner_view_modes) or None,
+        "--train-planner-view-modes",
+    )
+    set_if_config(
+        "val_planner_view_modes",
+        list(build_config.val_planner_view_modes) or None,
+        "--val-planner-view-modes",
+    )
+    set_if_config("planner_branch", str(data_config.planner_branch), "--planner-branch")
+    set_if_config("planner_value_variant", str(build_config.planner_value_variant), "--planner-value-variant")
+    set_if_config("planner_assignment_seed", int(build_config.planner_assignment_seed), "--planner-assignment-seed")
+    set_if_config(
+        "planner_dropout_episode_prob",
+        float(build_config.planner_dropout_episode_prob),
+        "--planner-dropout-episode-prob",
+    )
+    set_if_config(
+        "planner_view_mode_probs",
+        _probability_map_cli_values(build_config.planner_view_mode_probs),
+        "--planner-view-mode-probs",
+    )
+    set_if_config(
+        "planner_branch_probs",
+        _probability_map_cli_values(build_config.planner_branch_probs),
+        "--planner-branch-probs",
+    )
+    set_if_config("planner_index_name", str(build_config.planner_index_name), "--planner-index-name")
+    set_if_config("planner_arrays_name", str(build_config.planner_arrays_name), "--planner-arrays-name")
+    set_if_config(
+        "planner_complete_marker_name",
+        str(build_config.planner_complete_marker_name),
+        "--planner-complete-marker-name",
+    )
+    set_if_config(
+        "require_planner_complete_marker",
+        bool(build_config.require_planner_complete_marker),
+        "--require-planner-complete-marker",
+        "--no-require-planner-complete-marker",
+    )
+    set_if_config("allow_missing_planner_rows", bool(build_config.allow_missing_planner_rows), "--allow-missing-planner-rows")
+    set_if_config("speed_weighting", bool(build_config.speed_weighting), "--speed-weighting", "--no-speed-weighting")
+    set_if_config("speed_label_relpaths", list(build_config.speed_label_relpaths), "--speed-label-relpaths")
+    set_if_config("speed_stats_split", str(build_config.speed_stats_split), "--speed-stats-split")
+    set_if_config("speed_semantic_group_size", int(build_config.speed_semantic_group_size), "--speed-semantic-group-size")
+    set_if_config(
+        "speed_final_unpaired_policy",
+        str(build_config.speed_final_unpaired_policy),
+        "--speed-final-unpaired-policy",
+    )
+    set_if_config("speed_done_policy", str(build_config.speed_done_policy), "--speed-done-policy")
+    set_if_config("speed_alpha", float(build_config.speed_alpha), "--speed-alpha")
+    set_if_config("speed_min_weight", float(build_config.speed_min_weight), "--speed-min-weight")
+    set_if_config("speed_max_weight", float(build_config.speed_max_weight), "--speed-max-weight")
+    set_if_config("speed_epsilon_frames", float(build_config.speed_epsilon_frames), "--speed-epsilon-frames")
+    set_if_config("speed_weight_val", bool(build_config.speed_weight_val), "--speed-weight-val", "--no-speed-weight-val")
+    set_if_config("train_index_name", str(build_config.train_index_name), "--train-index-name")
+    set_if_config("val_index_name", str(build_config.val_index_name), "--val-index-name")
+    return args
 
 
 @dataclass(frozen=True)
@@ -896,7 +1045,11 @@ def _build_split_frame(
 
 
 def main() -> int:
-    args = parse_args()
+    args = _resolve_args_from_config(parse_args())
+    if args.dataset_root is None:
+        raise ValueError("--dataset-root is required unless it is supplied by --config-name.")
+    if args.output_root is None:
+        raise ValueError("--output-root is required unless it is supplied by --config-name.")
     if args.frame_stride <= 0:
         raise ValueError("--frame-stride must be positive.")
     if args.action_horizon <= 0:
@@ -904,9 +1057,9 @@ def main() -> int:
     if args.action_chunk_stride <= 0:
         raise ValueError("--action-chunk-stride must be positive.")
 
-    dataset_root = args.dataset_root
-    output_root = args.output_root
-    planner_export_root = args.planner_export_root
+    dataset_root = Path(args.dataset_root)
+    output_root = Path(args.output_root)
+    planner_export_root = None if args.planner_export_root is None else Path(args.planner_export_root)
     planner_view_mode_probs = _parse_probability_map(
         args.planner_view_mode_probs,
         default={"frame_stride_10": 0.5, "random_mix": 0.25, "fixed_7": 0.25, "fixed_15": 0.0},
@@ -1016,6 +1169,7 @@ def main() -> int:
     val_frame.to_parquet(val_path, index=False)
 
     manifest: dict[str, Any] = {
+        "config_name": args.config_name,
         "dataset_root": str(dataset_root),
         "output_root": str(output_root),
         "train_index_name": train_path.name,

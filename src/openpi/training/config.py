@@ -406,6 +406,56 @@ class OrigamiVlaDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class OrigamiCompActionChunkManifestBuildConfig:
+    checkpoint_planner_manifest_root: str | None = None
+    ignore_checkpoint_planner_split: bool = True
+    num_val_episodes: int = 0
+    val_seed: int = 1234
+    val_episode_uids: tuple[str, ...] = ()
+    frame_stride: int = 1
+    keep_horizon_clipped: bool = False
+    planner_export_root: str | None = None
+    planner_assignment_mode: Literal["expand_view_modes", "episode_sampled"] = "episode_sampled"
+    train_planner_view_modes: tuple[str, ...] = ("frame_stride_10", "fixed_7", "fixed_15", "random_mix")
+    val_planner_view_modes: tuple[str, ...] = ("frame_stride_10", "random_mix")
+    planner_value_variant: Literal["final", "raw"] = "final"
+    planner_assignment_seed: int = 1234
+    planner_dropout_episode_prob: float = 0.16
+    planner_view_mode_probs: dict[str, float] = dataclasses.field(
+        default_factory=lambda: {
+            "frame_stride_10": 0.5,
+            "random_mix": 0.25,
+            "fixed_7": 0.25,
+            "fixed_15": 0.0,
+        }
+    )
+    planner_branch_probs: dict[str, float] = dataclasses.field(
+        default_factory=lambda: {
+            "posterior": 0.5,
+            "prior": 0.5,
+        }
+    )
+    planner_index_name: str = "planner_vla_rollout_index.parquet"
+    planner_arrays_name: str = "planner_vla_rollout_features.npz"
+    planner_complete_marker_name: str = "export_complete.marker"
+    require_planner_complete_marker: bool = True
+    allow_missing_planner_rows: bool = False
+    speed_weighting: bool = True
+    speed_label_relpaths: tuple[str, ...] = ("labels/checkpoints.json", "labels/transfer_checkpoints.json")
+    speed_stats_split: Literal["train", "val", "all"] = "train"
+    speed_semantic_group_size: int = 2
+    speed_final_unpaired_policy: Literal["keep", "drop", "error"] = "keep"
+    speed_done_policy: Literal["neutral", "weighted"] = "neutral"
+    speed_alpha: float = 1.5
+    speed_min_weight: float = 0.5
+    speed_max_weight: float = 2.0
+    speed_epsilon_frames: float = 1.0e-6
+    speed_weight_val: bool = False
+    train_index_name: str = "train_index.parquet"
+    val_index_name: str = "val_index.parquet"
+
+
+@dataclasses.dataclass(frozen=True)
 class OrigamiCompActionChunkDataConfig(OrigamiVlaDataConfig):
     action_source: Literal["spline", "action_chunk"] = "action_chunk"
     local_target_npz_name: str = ""
@@ -413,6 +463,9 @@ class OrigamiCompActionChunkDataConfig(OrigamiVlaDataConfig):
     action_chunk_stride: int = 1
     drop_horizon_clipped: bool = True
     include_planner_features: bool = False
+    manifest_build: OrigamiCompActionChunkManifestBuildConfig = dataclasses.field(
+        default_factory=OrigamiCompActionChunkManifestBuildConfig
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -2559,6 +2612,53 @@ _CONFIGS = [
                 "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
             },
             include_planner_features=True,
+            manifest_build=OrigamiCompActionChunkManifestBuildConfig(
+                checkpoint_planner_manifest_root=None,
+                ignore_checkpoint_planner_split=True,
+                num_val_episodes=0,
+                val_seed=1234,
+                val_episode_uids=(),
+                frame_stride=1,
+                keep_horizon_clipped=False,
+                planner_export_root=(
+                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "metadata/checkpoint_planner_vla_rollout_exports/no_hmm_224_headleft_tactile_distill"
+                ),
+                planner_assignment_mode="episode_sampled",
+                train_planner_view_modes=("frame_stride_10", "fixed_7", "fixed_15", "random_mix"),
+                val_planner_view_modes=("frame_stride_10", "random_mix"),
+                planner_value_variant="final",
+                planner_assignment_seed=1234,
+                planner_dropout_episode_prob=0.16,
+                planner_view_mode_probs={
+                    "frame_stride_10": 0.5,
+                    "random_mix": 0.25,
+                    "fixed_7": 0.25,
+                    "fixed_15": 0.0,
+                },
+                planner_branch_probs={
+                    "posterior": 0.5,
+                    "prior": 0.5,
+                },
+                planner_index_name="planner_vla_rollout_index.parquet",
+                planner_arrays_name="planner_vla_rollout_features.npz",
+                planner_complete_marker_name="export_complete.marker",
+                require_planner_complete_marker=True,
+                allow_missing_planner_rows=False,
+                speed_weighting=True,
+                speed_label_relpaths=("labels/checkpoints.json", "labels/transfer_checkpoints.json"),
+                speed_stats_split="train",
+                speed_semantic_group_size=2,
+                speed_final_unpaired_policy="keep",
+                speed_done_policy="neutral",
+                speed_alpha=1.5,
+                speed_min_weight=0.5,
+                speed_max_weight=2.0,
+                speed_epsilon_frames=1.0e-6,
+                speed_weight_val=False,
+                train_index_name="train_index.parquet",
+                val_index_name="val_index.parquet",
+            ),
             data_transforms=lambda model: _transforms.Group(
                 inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(65))],
                 outputs=[_transforms.AbsoluteActions(_transforms.make_bool_mask(65))],
