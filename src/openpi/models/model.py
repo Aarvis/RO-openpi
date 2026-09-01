@@ -43,6 +43,29 @@ IMAGE_KEYS = (
 )
 
 
+def _orbax_metadata_tree(metadata):
+    """Return the PyTree metadata across Orbax metadata API versions."""
+    if isinstance(metadata, dict):
+        return metadata
+
+    tree = getattr(metadata, "tree", None)
+    if tree is not None:
+        return tree
+
+    item_metadata = getattr(metadata, "item_metadata", None)
+    if item_metadata is not None:
+        if isinstance(item_metadata, dict):
+            return item_metadata
+        tree = getattr(item_metadata, "tree", None)
+        if tree is not None:
+            return tree
+
+    raise TypeError(
+        "Unsupported Orbax metadata object returned by PyTreeCheckpointer.metadata(): "
+        f"{type(metadata)!r}. Expected dict-like metadata or an object with a 'tree' attribute."
+    )
+
+
 # This may need change if we release a small model.
 IMAGE_RESOLUTION = (224, 224)
 
@@ -436,10 +459,13 @@ def restore_params(
 
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
-        if isinstance(metadata, dict):
-            item = {"params": metadata["params"]}
-        else:
-            item = {"params": metadata.item_metadata.tree["params"]}
+        metadata_tree = _orbax_metadata_tree(metadata)
+        if "params" not in metadata_tree:
+            raise KeyError(
+                f"Checkpoint metadata at {params_path} does not contain a top-level 'params' item. "
+                f"Available keys: {sorted(str(key) for key in metadata_tree.keys())}"
+            )
+        item = {"params": metadata_tree["params"]}
 
         params = ckptr.restore(
             params_path,
