@@ -296,6 +296,14 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     planner_branch: str = "alias"
     planner_value_variant: Literal["final", "raw"] = "final"
     tactile_filename: str = "tactile_60d.npy"
+    dataset_backend: Literal["video", "shard"] = "video"
+    shard_root: str | None = None
+    shard_manifest_name: str = "shard_manifest.json"
+    shard_rows_name: str = "rows.parquet"
+    shard_complete_marker_name: str = "complete.marker"
+    shard_require_complete: bool = True
+    shard_max_cached_shards: int = 2
+    shard_use_stored_row_order: bool = True
     sample_weight_column: str = "sample_weight"
     require_sample_weight: bool = False
     image_source_type: Literal["video", "frame_cache"] = "video"
@@ -372,6 +380,14 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             planner_belief_dim=model_config.origami_vla.belief_dim,
             planner_history_dim=model_config.origami_vla.history_dim,
             tactile_filename=self.tactile_filename,
+            dataset_backend=self.dataset_backend,
+            shard_root=self.shard_root,
+            shard_manifest_name=self.shard_manifest_name,
+            shard_rows_name=self.shard_rows_name,
+            shard_complete_marker_name=self.shard_complete_marker_name,
+            shard_require_complete=self.shard_require_complete,
+            shard_max_cached_shards=self.shard_max_cached_shards,
+            shard_use_stored_row_order=self.shard_use_stored_row_order,
             max_control_points=model_config.origami_vla.max_control_points,
             action_horizon=model_config.action_horizon,
             max_span_count=model_config.origami_vla.max_span_count,
@@ -462,6 +478,33 @@ class OrigamiCompActionChunkManifestBuildConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class OrigamiCompActionChunkShardBuildConfig:
+    shard_root: str | None = None
+    split: Literal["train", "val", "all"] = "train"
+    target_shard_bytes: str = "128GiB"
+    target_num_shards: int | None = None
+    max_episodes_per_shard: int | None = None
+    num_workers: int = 8
+    seed: int = 1234
+    season_column: str = "source_season"
+    row_order: Literal["episode_sequential", "shuffled_index"] = "shuffled_index"
+    image_size: int = 224
+    overwrite: bool = False
+    skip_existing: bool = True
+    require_manifest_verified: bool = False
+    shard_manifest_name: str = "shard_manifest.json"
+    shard_plan_name: str = "shard_plan.parquet"
+    rows_name: str = "rows.parquet"
+    metadata_name: str = "metadata.json"
+    complete_marker_name: str = "complete.marker"
+    max_shards_per_run: int | None = None
+    progress_update_frames: int = 256
+    progress_max_active_bars: int = 8
+    progress_poll_seconds: float = 0.25
+    progress_leave_active_bars: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
 class OrigamiCompActionChunkDataConfig(OrigamiVlaDataConfig):
     action_source: Literal["spline", "action_chunk"] = "action_chunk"
     local_target_npz_name: str = ""
@@ -469,8 +512,19 @@ class OrigamiCompActionChunkDataConfig(OrigamiVlaDataConfig):
     action_chunk_stride: int = 1
     drop_horizon_clipped: bool = True
     include_planner_features: bool = False
+    dataset_backend: Literal["video", "shard"] = "video"
+    shard_root: str | None = None
+    shard_manifest_name: str = "shard_manifest.json"
+    shard_rows_name: str = "rows.parquet"
+    shard_complete_marker_name: str = "complete.marker"
+    shard_require_complete: bool = True
+    shard_max_cached_shards: int = 2
+    shard_use_stored_row_order: bool = True
     manifest_build: OrigamiCompActionChunkManifestBuildConfig = dataclasses.field(
         default_factory=OrigamiCompActionChunkManifestBuildConfig
+    )
+    shard_build: OrigamiCompActionChunkShardBuildConfig = dataclasses.field(
+        default_factory=OrigamiCompActionChunkShardBuildConfig
     )
 
 
@@ -2597,6 +2651,17 @@ _CONFIGS = [
             planner_branch="posterior",
             planner_value_variant="final",
             tactile_filename="tactile_60d.npy",
+            dataset_backend="video",
+            shard_root=(
+                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
+            ),
+            shard_manifest_name="shard_manifest.json",
+            shard_rows_name="rows.parquet",
+            shard_complete_marker_name="complete.marker",
+            shard_require_complete=True,
+            shard_max_cached_shards=2,
+            shard_use_stored_row_order=True,
             load_tactile_images=True,
             tactile_deform_video="videos/tactile_deform.mp4",
             tactile_raw_video="videos/tactile_raw.mp4",
@@ -2631,7 +2696,8 @@ _CONFIGS = [
                 keep_horizon_clipped=False,
                 planner_export_root=(
                     "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
-                    "metadata/checkpoint_planner_vla_rollout_exports/no_hmm_224_headleft_tactile_distill"
+                    "metadata/checkpoint_planner_vla_rollout_exports/"
+                    "no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
                 ),
                 planner_assignment_mode="episode_sampled",
                 train_planner_view_modes=("frame_stride_10", "fixed_7", "fixed_15", "random_mix"),
@@ -2660,13 +2726,41 @@ _CONFIGS = [
                 speed_semantic_group_size=2,
                 speed_final_unpaired_policy="keep",
                 speed_done_policy="neutral",
-                speed_alpha=1.5,
-                speed_min_weight=0.5,
-                speed_max_weight=2.0,
+                speed_alpha=2.2,
+                speed_min_weight=0.65,
+                speed_max_weight=1.5,
                 speed_epsilon_frames=1.0e-6,
                 speed_weight_val=False,
                 train_index_name="train_index.parquet",
                 val_index_name="val_index.parquet",
+            ),
+            shard_build=OrigamiCompActionChunkShardBuildConfig(
+                shard_root=(
+                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
+                ),
+                split="train",
+                target_shard_bytes="128GiB",
+                target_num_shards=None,
+                max_episodes_per_shard=None,
+                num_workers=8,
+                seed=1234,
+                season_column="source_season",
+                row_order="shuffled_index",
+                image_size=224,
+                overwrite=False,
+                skip_existing=True,
+                require_manifest_verified=False,
+                shard_manifest_name="shard_manifest.json",
+                shard_plan_name="shard_plan.parquet",
+                rows_name="rows.parquet",
+                metadata_name="metadata.json",
+                complete_marker_name="complete.marker",
+                max_shards_per_run=None,
+                progress_update_frames=256,
+                progress_max_active_bars=8,
+                progress_poll_seconds=0.25,
+                progress_leave_active_bars=False,
             ),
             data_transforms=lambda model: _transforms.Group(
                 inputs=[_transforms.DeltaActions(_transforms.make_bool_mask(65))],

@@ -14,11 +14,12 @@ import torch
 
 import openpi.models.model as _model
 import openpi.training.config as _config
-from openpi.training.droid_rlds_dataset import DroidRldsDataset
 import openpi.training.future_latent_sidecar as _future_latent_sidecar
+import openpi.training.origami_comp_action_chunk_shards as _origami_comp_action_chunk_shards
 import openpi.training.origami_vla_dataset as _origami_vla_dataset
 import openpi.training.robot_spline_sidecar as _robot_spline_sidecar
 import openpi.transforms as _transforms
+from openpi.training.droid_rlds_dataset import DroidRldsDataset
 
 T_co = TypeVar("T_co", covariant=True)
 
@@ -161,6 +162,10 @@ def create_torch_dataset(
 ) -> Dataset:
     """Create a dataset for training."""
     if data_config.origami_vla is not None:
+        if data_config.origami_vla.dataset_backend == "shard":
+            return _origami_comp_action_chunk_shards.OrigamiCompActionChunkShardDataset(
+                data_config.origami_vla, split=data_config.dataset_split
+            )
         return _origami_vla_dataset.OrigamiVlaDataset(data_config.origami_vla, split=data_config.dataset_split)
 
     repo_id = data_config.repo_id

@@ -41,6 +41,14 @@ class OrigamiVlaSettings:
     sample_weight_column: str = "sample_weight"
     require_sample_weight: bool = False
     tactile_filename: str = "tactile_60d.npy"
+    dataset_backend: Literal["video", "shard"] = "video"
+    shard_root: str | None = None
+    shard_manifest_name: str = "shard_manifest.json"
+    shard_rows_name: str = "rows.parquet"
+    shard_complete_marker_name: str = "complete.marker"
+    shard_require_complete: bool = True
+    shard_max_cached_shards: int = 2
+    shard_use_stored_row_order: bool = True
     image_source_type: Literal["video", "frame_cache"] = "video"
     image_modalities: dict[str, str] = dataclasses.field(
         default_factory=lambda: {
@@ -119,6 +127,10 @@ class OrigamiVlaSettings:
             raise ValueError(f"max_cached_episodes must be positive, got {self.max_cached_episodes}")
         if self.max_cached_videos <= 0:
             raise ValueError(f"max_cached_videos must be positive, got {self.max_cached_videos}")
+        if self.shard_max_cached_shards <= 0:
+            raise ValueError(f"shard_max_cached_shards must be positive, got {self.shard_max_cached_shards}")
+        if self.dataset_backend == "shard" and not self.shard_root:
+            raise ValueError("dataset_backend='shard' requires shard_root to be set.")
 
 
 def _ensure_path(value: str | Path) -> Path:
