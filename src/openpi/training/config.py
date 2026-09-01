@@ -346,6 +346,9 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     include_planner_features: bool = True
     data_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=NoOpTransformFactory)
     model_transforms: tyro.conf.Suppress[GroupFactory] = dataclasses.field(default_factory=ModelTransformFactory)
+    limit_loader_caches: bool = False
+    max_cached_episodes: int = 8
+    max_cached_videos: int = 32
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -394,6 +397,9 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             tactile_deform_grid=dict(self.tactile_deform_grid),
             include_planner_features=self.include_planner_features,
             fail_on_missing_modalities=self.fail_on_missing_modalities,
+            limit_loader_caches=self.limit_loader_caches,
+            max_cached_episodes=self.max_cached_episodes,
+            max_cached_videos=self.max_cached_videos,
             max_rows=self.max_rows,
         )
         return dataclasses.replace(
@@ -2612,6 +2618,9 @@ _CONFIGS = [
                 "right_wrist_0_rgb": "right_wrist_0_rgb_224x224_uint8.npy",
             },
             include_planner_features=True,
+            limit_loader_caches=True,
+            max_cached_episodes=4,
+            max_cached_videos=24,
             manifest_build=OrigamiCompActionChunkManifestBuildConfig(
                 checkpoint_planner_manifest_root=None,
                 ignore_checkpoint_planner_split=True,

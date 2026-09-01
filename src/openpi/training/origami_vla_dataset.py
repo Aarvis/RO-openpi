@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import dataclasses
 import hashlib
 from pathlib import Path
@@ -85,6 +86,9 @@ class OrigamiVlaSettings:
     )
     include_planner_features: bool = True
     fail_on_missing_modalities: bool = True
+    limit_loader_caches: bool = False
+    max_cached_episodes: int = 8
+    max_cached_videos: int = 32
     max_rows: int | None = None
 
     def __post_init__(self) -> None:
@@ -111,6 +115,10 @@ class OrigamiVlaSettings:
                 "tactile_raw_input_dropout_prob must satisfy 0 <= p <= 1, "
                 f"got {self.tactile_raw_input_dropout_prob}"
             )
+        if self.max_cached_episodes <= 0:
+            raise ValueError(f"max_cached_episodes must be positive, got {self.max_cached_episodes}")
+        if self.max_cached_videos <= 0:
+            raise ValueError(f"max_cached_videos must be positive, got {self.max_cached_videos}")
 
 
 def _ensure_path(value: str | Path) -> Path:
@@ -302,26 +310,72 @@ class OrigamiVlaDataset:
     def __init__(self, settings: OrigamiVlaSettings, *, split: str):
         self._settings = settings
         self._dataset_root = _ensure_path(settings.dataset_root)
-        self._episode_cache: dict[str, _EpisodeBundle] = {}
-        self._video_cache: dict[str, cv2.VideoCapture] = {}
+        self._episode_cache: OrderedDict[str, _EpisodeBundle] = OrderedDict()
+        self._video_cache: OrderedDict[str, cv2.VideoCapture] = OrderedDict()
         self._rows = load_manifest_rows(settings, split).to_dict(orient="records")
+        self._planner_output_dirs_by_episode = self._index_planner_output_dirs()
 
     def __len__(self) -> int:
         return len(self._rows)
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
-        state["_episode_cache"] = {}
-        state["_video_cache"] = {}
+        state["_episode_cache"] = OrderedDict()
+        state["_video_cache"] = OrderedDict()
         return state
 
     def __del__(self) -> None:
         for capture in getattr(self, "_video_cache", {}).values():
             capture.release()
+        for bundle in getattr(self, "_episode_cache", {}).values():
+            self._close_episode_bundle(bundle)
+
+    def _index_planner_output_dirs(self) -> dict[str, dict[str, Path]]:
+        if not self._settings.include_planner_features:
+            return {}
+        by_episode: dict[str, dict[str, Path]] = {}
+        for row in self._rows:
+            if not _row_bool(row.get("planner_enabled", True), default=True):
+                continue
+            episode_uid = str(row["episode_uid"])
+            view_mode = str(row["view_mode"])
+            episode_dirs = by_episode.setdefault(episode_uid, {})
+            if view_mode in episode_dirs:
+                continue
+            planner_output_dir = row.get("planner_output_dir")
+            if planner_output_dir is None or pd.isna(planner_output_dir) or not str(planner_output_dir):
+                raise ValueError(f"Planner is enabled for {episode_uid}:{view_mode}, but planner_output_dir is empty.")
+            episode_dirs[view_mode] = _ensure_path(planner_output_dir)
+        return by_episode
+
+    def _close_np_archive(self, archive: Any | None) -> None:
+        close = getattr(archive, "close", None)
+        if close is not None:
+            close()
+
+    def _close_episode_bundle(self, bundle: _EpisodeBundle) -> None:
+        self._close_np_archive(bundle.target_archive)
+        for archive in bundle.planner_archives.values():
+            self._close_np_archive(archive)
+
+    def _enforce_episode_cache_limit(self) -> None:
+        if not self._settings.limit_loader_caches:
+            return
+        while len(self._episode_cache) > int(self._settings.max_cached_episodes):
+            _episode_uid, bundle = self._episode_cache.popitem(last=False)
+            self._close_episode_bundle(bundle)
+
+    def _enforce_video_cache_limit(self) -> None:
+        if not self._settings.limit_loader_caches:
+            return
+        while len(self._video_cache) > int(self._settings.max_cached_videos):
+            _video_path, capture = self._video_cache.popitem(last=False)
+            capture.release()
 
     def _episode_bundle(self, episode_uid: str) -> _EpisodeBundle:
         cached = self._episode_cache.get(episode_uid)
         if cached is not None:
+            self._episode_cache.move_to_end(episode_uid)
             return cached
 
         episode_root = self._dataset_root / "episodes" / episode_uid
@@ -348,21 +402,8 @@ class OrigamiVlaDataset:
             frame_cache_archives={},
         )
         if self._settings.include_planner_features:
-            for row in self._rows:
-                if row["episode_uid"] != episode_uid:
-                    continue
-                if not _row_bool(row.get("planner_enabled", True), default=True):
-                    continue
-                view_mode = str(row["view_mode"])
-                if view_mode in bundle.planner_archives:
-                    continue
-                planner_output_dir = row.get("planner_output_dir")
-                if planner_output_dir is None or pd.isna(planner_output_dir) or not str(planner_output_dir):
-                    raise ValueError(f"Planner is enabled for {episode_uid}:{view_mode}, but planner_output_dir is empty.")
-                planner_npz = (
-                    _ensure_path(planner_output_dir)
-                    / self._settings.planner_arrays_filename
-                )
+            for view_mode, planner_output_dir in self._planner_output_dirs_by_episode.get(episode_uid, {}).items():
+                planner_npz = planner_output_dir / self._settings.planner_arrays_filename
                 bundle.planner_archives[view_mode] = np.load(planner_npz, allow_pickle=False)
 
         if self._settings.image_source_type == "frame_cache":
@@ -379,17 +420,20 @@ class OrigamiVlaDataset:
                     f"Missing required frame-cache modalities for {episode_uid}: {missing_modalities}"
                 )
         self._episode_cache[episode_uid] = bundle
+        self._enforce_episode_cache_limit()
         return bundle
 
     def _video_capture(self, video_path: Path) -> cv2.VideoCapture:
         key = str(video_path)
         capture = self._video_cache.get(key)
         if capture is not None:
+            self._video_cache.move_to_end(key)
             return capture
         capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
             raise RuntimeError(f"Could not open video: {video_path}")
         self._video_cache[key] = capture
+        self._enforce_video_cache_limit()
         return capture
 
     def _read_video_frame(self, video_path: Path, frame_position: int) -> np.ndarray:
