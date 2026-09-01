@@ -594,25 +594,54 @@ def _load_speed_weight_settings(args: argparse.Namespace) -> SpeedWeightSettings
     )
 
 
-def _resolve_label_path(episode_root: Path, relpaths: tuple[str, ...]) -> Path | None:
+def _load_label_payload(path: Path) -> dict[str, Any]:
+    if path.suffix.lower() == ".jsonl":
+        rows = [
+            json.loads(line)
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        if len(rows) == 1 and isinstance(rows[0], dict) and "segments" in rows[0]:
+            return rows[0]
+        return {"segments": rows, "schema_version": "jsonl"}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _select_valid_label_payload(
+    episode_root: Path,
+    relpaths: tuple[str, ...],
+) -> tuple[Path, dict[str, Any]]:
+    missing_paths: list[str] = []
+    rejected: list[str] = []
     for relpath in relpaths:
         path = episode_root / relpath
-        if path.exists():
-            return path
-    return None
+        if not path.exists():
+            missing_paths.append(str(path))
+            continue
+        try:
+            payload = _load_label_payload(path)
+        except Exception as exc:  # noqa: BLE001
+            rejected.append(f"{path}: failed to read label payload: {exc}")
+            continue
+        segments = payload.get("segments", [])
+        if isinstance(segments, list) and segments:
+            return path, payload
+        rejected.append(f"{path}: expected a non-empty 'segments' list")
+
+    details = []
+    if rejected:
+        details.append("rejected=" + repr(rejected))
+    if missing_paths:
+        details.append("missing=" + repr(missing_paths))
+    raise FileNotFoundError(
+        f"No usable checkpoint label file found for {episode_root.name} under {relpaths}. "
+        + " ".join(details)
+    )
 
 
 def _load_label_info(episode_root: Path, settings: SpeedWeightSettings) -> EpisodeLabelInfo:
-    label_path = _resolve_label_path(episode_root, settings.label_priority_relpaths)
-    if label_path is None:
-        raise FileNotFoundError(
-            f"No checkpoint label file found for {episode_root.name} under {settings.label_priority_relpaths}"
-        )
-
-    payload = json.loads(label_path.read_text(encoding="utf-8"))
+    label_path, payload = _select_valid_label_payload(episode_root, settings.label_priority_relpaths)
     segments = payload.get("segments", [])
-    if not isinstance(segments, list) or not segments:
-        raise ValueError(f"{label_path}: expected a non-empty 'segments' list")
     segments = sorted(segments, key=lambda row: int(row["start_frame"]))
 
     spans: list[SemanticCheckpointSpan] = []
