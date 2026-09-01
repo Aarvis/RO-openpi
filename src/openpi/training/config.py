@@ -468,9 +468,9 @@ class OrigamiCompActionChunkManifestBuildConfig:
     speed_semantic_group_size: int = 2
     speed_final_unpaired_policy: Literal["keep", "drop", "error"] = "keep"
     speed_done_policy: Literal["neutral", "weighted"] = "neutral"
-    speed_alpha: float = 1.5
-    speed_min_weight: float = 0.5
-    speed_max_weight: float = 2.0
+    speed_alpha: float = 2.2
+    speed_min_weight: float = 0.65
+    speed_max_weight: float = 1.5
     speed_epsilon_frames: float = 1.0e-6
     speed_weight_val: bool = False
     train_index_name: str = "train_index.parquet"
@@ -2642,9 +2642,9 @@ _CONFIGS = [
         data=OrigamiCompActionChunkDataConfig(
             repo_id="local/origami_comp_action_chunk",
             assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk"),
-            dataset_root="E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset",
+            dataset_root="/data/RO-competition-paper-dataset",
             manifest_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/data/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             prompt="fold paper into airplane",
@@ -2653,7 +2653,7 @@ _CONFIGS = [
             tactile_filename="tactile_60d.npy",
             dataset_backend="video",
             shard_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/data/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             shard_manifest_name="shard_manifest.json",
@@ -2671,6 +2671,7 @@ _CONFIGS = [
             tactile_raw_dropout_seed=1234,
             sample_weight_column="sample_weight",
             require_sample_weight=True,
+            drop_horizon_clipped=True,
             image_source_type="video",
             image_modalities={
                 "base_0_rgb": "videos/head_left.mp4",
@@ -2695,9 +2696,7 @@ _CONFIGS = [
                 frame_stride=1,
                 keep_horizon_clipped=False,
                 planner_export_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
-                    "metadata/checkpoint_planner_vla_rollout_exports/"
-                    "no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
+                    "/data/RO-competition-paper-dataset/metadata/checkpoint_planner_vla_rollout_exports/no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
                 ),
                 planner_assignment_mode="episode_sampled",
                 train_planner_view_modes=("frame_stride_10", "fixed_7", "fixed_15", "random_mix"),
@@ -2726,9 +2725,9 @@ _CONFIGS = [
                 speed_semantic_group_size=2,
                 speed_final_unpaired_policy="keep",
                 speed_done_policy="neutral",
-                speed_alpha=2.2,
-                speed_min_weight=0.65,
-                speed_max_weight=1.5,
+                speed_alpha = 2.2,
+                speed_min_weight = 0.65,
+                speed_max_weight = 1.5,
                 speed_epsilon_frames=1.0e-6,
                 speed_weight_val=False,
                 train_index_name="train_index.parquet",
@@ -2736,7 +2735,7 @@ _CONFIGS = [
             ),
             shard_build=OrigamiCompActionChunkShardBuildConfig(
                 shard_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/data/RO-competition-paper-dataset/"
                     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
                 ),
                 split="train",
@@ -2778,16 +2777,13 @@ _CONFIGS = [
                 ),
                 weight_loaders.NpzSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
-                        "metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/"
-                        "openpi_origami_planner_adapter_prefixed_params.npz"
+                        "/data/RO-competition-paper-dataset/metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/openpi_origami_planner_adapter_prefixed_params.npz"
                     ),
                     strict=True,
                 ),
                 weight_loaders.OrbaxSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
-                        "metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
+                        "/data/RO-competition-paper-dataset/metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
                     ),
                     key_prefix="origami_ftp_tactile_prefix_encoder",
                     strict=True,
@@ -2796,9 +2792,9 @@ _CONFIGS = [
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
             warmup_steps=2_000,
-            peak_lr=2e-4,
-            decay_steps=60_000,
-            decay_lr=2e-6,
+            peak_lr=8e-5,
+            decay_steps=560_000,
+            decay_lr=1e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
@@ -2808,18 +2804,19 @@ _CONFIGS = [
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder.*", multiplier=1.5),
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
         ),
-        batch_size=32,
-        num_workers=8,
-        num_train_steps=60_000,
-        log_interval=100,
+        batch_size=5,
+        num_workers=0,
+        num_train_steps=560_000,
+        log_interval=50,
         run_val=False,
         val_repo_id=None,
         val_frequency=2_000,
         val_batch_size=32,
         checkpoint_strategy="manual",
-        save_interval=5_000,
-        keep_period=10_000,
-        max_to_keep=3,
+        # save_interval=5_000,
+        save_steps=(150, 1000, 70000),
+        # keep_period=10_000,
+        max_to_keep=4,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
