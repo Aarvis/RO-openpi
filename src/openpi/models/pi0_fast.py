@@ -20,6 +20,15 @@ logger = logging.getLogger("openpi")
 PALIGEMMA_EOS_TOKEN = 1
 
 
+def _safe_cumsum(values: at.Array, *, axis: int) -> at.Array:
+    """Compute cumulative sums without XLA's reduce-window cumsum lowering."""
+    return jax.lax.associative_scan(jnp.add, values, axis=axis)
+
+
+def _positions_from_input_mask(input_mask: at.Array) -> at.Array:
+    return _safe_cumsum(jnp.asarray(input_mask, dtype=jnp.int32), axis=-1) - 1
+
+
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
 
@@ -44,11 +53,11 @@ def make_attn_mask(input_mask, mask_ar):
     input_mask = jnp.asarray(input_mask, dtype=jnp.bool_)
     mask_ar = jnp.asarray(mask_ar, dtype=jnp.bool_)
     if mask_ar.ndim == 1:
-        cumsum = jnp.cumsum(mask_ar.astype(jnp.int32), axis=0)
+        cumsum = _safe_cumsum(mask_ar.astype(jnp.int32), axis=0)
         attn_mask = cumsum[None, None, :] <= cumsum[None, :, None]
     else:
         mask_ar = jnp.broadcast_to(mask_ar, input_mask.shape)
-        cumsum = jnp.cumsum(mask_ar.astype(jnp.int32), axis=1)
+        cumsum = _safe_cumsum(mask_ar.astype(jnp.int32), axis=1)
         attn_mask = cumsum[:, None, :] <= cumsum[:, :, None]
     valid_mask = jnp.logical_and(input_mask[:, None, :], input_mask[:, :, None])
     return jnp.logical_and(attn_mask, valid_mask)
@@ -267,7 +276,7 @@ class Pi0FAST(_model.BaseModel):
         # first fill KV cache with a forward pass of the prefix
         # pad attention mask to set the size of the KV cache (prefill_size + max_decoding_steps)
         prefix_attn_mask = jnp.pad(prefix_attn_mask, ((0, 0), (0, 0), (0, max_decoding_steps)))
-        prefix_positions = jnp.cumsum(prefix_mask, axis=-1) - 1
+        prefix_positions = _positions_from_input_mask(prefix_mask)
         prefix_logits, kv_cache, _ = self.PaliGemma.llm(
             embedded_prefix=prefix_token_embeddings, mask=prefix_attn_mask, positions=prefix_positions, decode=True
         )

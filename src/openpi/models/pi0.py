@@ -25,6 +25,15 @@ import openpi.shared.normalize as _normalize
 logger = logging.getLogger("openpi")
 
 
+def _safe_cumsum(values: at.Array, *, axis: int) -> at.Array:
+    """Compute cumulative sums without XLA's reduce-window cumsum lowering."""
+    return jax.lax.associative_scan(jnp.add, values, axis=axis)
+
+
+def _positions_from_input_mask(input_mask: at.Array) -> at.Array:
+    return _safe_cumsum(jnp.asarray(input_mask, dtype=jnp.int32), axis=1) - 1
+
+
 def make_attn_mask(input_mask, mask_ar):
     """Adapted from big_vision.
 
@@ -49,11 +58,11 @@ def make_attn_mask(input_mask, mask_ar):
     input_mask = jnp.asarray(input_mask, dtype=jnp.bool_)
     mask_ar = jnp.asarray(mask_ar, dtype=jnp.bool_)
     if mask_ar.ndim == 1:
-        cumsum = jnp.cumsum(mask_ar.astype(jnp.int32), axis=0)
+        cumsum = _safe_cumsum(mask_ar.astype(jnp.int32), axis=0)
         attn_mask = cumsum[None, None, :] <= cumsum[None, :, None]
     else:
         mask_ar = jnp.broadcast_to(mask_ar, input_mask.shape)
-        cumsum = jnp.cumsum(mask_ar.astype(jnp.int32), axis=1)
+        cumsum = _safe_cumsum(mask_ar.astype(jnp.int32), axis=1)
         attn_mask = cumsum[:, None, :] <= cumsum[:, :, None]
     valid_mask = jnp.logical_and(input_mask[:, None, :], input_mask[:, :, None])
     return jnp.logical_and(attn_mask, valid_mask)
@@ -581,7 +590,7 @@ class Pi0(_model.BaseModel):
         input_mask = jnp.concatenate([prefix_mask, suffix_mask], axis=1)
         ar_mask = jnp.concatenate([prefix_ar_mask, suffix_ar_mask], axis=0)
         attn_mask = make_attn_mask(input_mask, ar_mask)
-        positions = jnp.cumsum(input_mask, axis=1) - 1
+        positions = _positions_from_input_mask(input_mask)
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
             [prefix_tokens, suffix_tokens], mask=attn_mask, positions=positions, adarms_cond=[None, adarms_cond]
         )
@@ -698,7 +707,7 @@ class Pi0(_model.BaseModel):
     ]:
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation)
         prefix_attn_mask = make_attn_mask(prefix_mask, prefix_ar_mask)
-        positions = jnp.cumsum(prefix_mask, axis=1) - 1
+        positions = _positions_from_input_mask(prefix_mask)
         _, kv_cache = self.PaliGemma.llm([prefix_tokens, None], mask=prefix_attn_mask, positions=positions)
         return prefix_tokens, prefix_mask, kv_cache
 
@@ -716,7 +725,9 @@ class Pi0(_model.BaseModel):
         suffix_attn_mask = make_attn_mask(suffix_mask, suffix_ar_mask)
         prefix_attn_mask = einops.repeat(prefix_mask, "b p -> b s p", s=suffix_tokens.shape[1])
         full_attn_mask = jnp.concatenate([prefix_attn_mask, suffix_attn_mask], axis=-1)
-        positions = jnp.sum(prefix_mask, axis=-1)[:, None] + jnp.cumsum(suffix_mask, axis=-1) - 1
+        positions = jnp.sum(prefix_mask, axis=-1)[:, None] + _safe_cumsum(
+            jnp.asarray(suffix_mask, dtype=jnp.int32), axis=-1
+        ) - 1
 
         (prefix_out, suffix_out), _ = self.PaliGemma.llm(
             [None, suffix_tokens],
