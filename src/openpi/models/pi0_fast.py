@@ -41,10 +41,16 @@ def make_attn_mask(input_mask, mask_ar):
       mask_ar: bool[?B, N] mask that's true where previous tokens cannot depend on
         it and false where it shares the same attention mask as the previous token.
     """
-    mask_ar = jnp.broadcast_to(mask_ar, input_mask.shape)
-    cumsum = jnp.cumsum(mask_ar, axis=1)
-    attn_mask = cumsum[:, None, :] <= cumsum[:, :, None]
-    valid_mask = input_mask[:, None, :] * input_mask[:, :, None]
+    input_mask = jnp.asarray(input_mask, dtype=jnp.bool_)
+    mask_ar = jnp.asarray(mask_ar, dtype=jnp.bool_)
+    if mask_ar.ndim == 1:
+        cumsum = jnp.cumsum(mask_ar.astype(jnp.int32), axis=0)
+        attn_mask = cumsum[None, None, :] <= cumsum[None, :, None]
+    else:
+        mask_ar = jnp.broadcast_to(mask_ar, input_mask.shape)
+        cumsum = jnp.cumsum(mask_ar.astype(jnp.int32), axis=1)
+        attn_mask = cumsum[:, None, :] <= cumsum[:, :, None]
+    valid_mask = jnp.logical_and(input_mask[:, None, :], input_mask[:, :, None])
     return jnp.logical_and(attn_mask, valid_mask)
 
 
