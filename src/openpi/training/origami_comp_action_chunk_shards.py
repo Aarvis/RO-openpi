@@ -507,7 +507,8 @@ class OrigamiCompActionChunkShardDataset:
             "tactile_prompt": np.array(tactile, copy=True),
             "tactile_prompt_mask": np.ones((self._settings.tactile_dim,), dtype=bool),
             "state_mask": np.ones((self._settings.state_dim,), dtype=bool),
-            "actions": np.asarray(arrays["actions"][physical_index], dtype=np.float32),
+            # DeltaActions mutates action targets in place, while shard arrays are read-only memmap views.
+            "actions": np.array(arrays["actions"][physical_index], dtype=np.float32, copy=True),
             "action_mask": np.asarray(arrays["action_mask"][physical_index], dtype=bool),
             "sample_weight": np.asarray(arrays["sample_weight"][physical_index], dtype=np.float32),
             "prompt": np.asarray(self._settings.prompt),
