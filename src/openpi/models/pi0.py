@@ -27,7 +27,15 @@ logger = logging.getLogger("openpi")
 
 def _safe_cumsum(values: at.Array, *, axis: int) -> at.Array:
     """Compute cumulative sums without XLA's reduce-window cumsum lowering."""
-    return jax.lax.associative_scan(jnp.add, values, axis=axis)
+    values = jnp.moveaxis(values, axis, 0)
+    init = jnp.zeros(values.shape[1:], dtype=values.dtype)
+
+    def step(carry, value):
+        carry = carry + value
+        return carry, carry
+
+    _, out = jax.lax.scan(step, init, values)
+    return jnp.moveaxis(out, 0, axis)
 
 
 def _positions_from_input_mask(input_mask: at.Array) -> at.Array:
