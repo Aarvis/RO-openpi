@@ -411,15 +411,28 @@ class OrigamiCompActionChunkShardDataset:
         state["_shard_cache"] = OrderedDict()
         return state
 
-    def __del__(self) -> None:
-        for bundle in getattr(self, "_shard_cache", {}).values():
+    def close(self) -> None:
+        cache = getattr(self, "_shard_cache", None)
+        if cache is None:
+            return
+        while cache:
+            _shard_id, bundle = cache.popitem(last=False)
             self._close_shard_bundle(bundle)
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def _close_shard_bundle(self, bundle: _ShardBundle) -> None:
+        close_memmap = _close_memmap
+        if not callable(close_memmap):
+            return
         for array in bundle.arrays.values():
-            _close_memmap(array)
+            close_memmap(array)
         if bundle.row_order is not None:
-            _close_memmap(bundle.row_order)
+            close_memmap(bundle.row_order)
 
     def _enforce_cache_limit(self) -> None:
         while len(self._shard_cache) > int(self._settings.shard_max_cached_shards):
