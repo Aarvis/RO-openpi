@@ -479,6 +479,9 @@ def create_torch_data_loader(
             execute in the main process.
         seed: The seed to use for shuffling the data.
     """
+    shard_streaming = (
+        data_config.origami_vla is not None and data_config.origami_vla.dataset_backend == "shard"
+    )
     if data_config.multi_dataset_specs:
         import openpi.training.multi_dataset as _multi_dataset
 
@@ -515,13 +518,21 @@ def create_torch_data_loader(
                 drop_last=True,
             )
     local_batch_size = _get_local_batch_size(batch_size, framework)
+    effective_shuffle = sampler is None and shuffle
+    if shard_streaming:
+        if effective_shuffle:
+            logging.info(
+                "Disabling outer DataLoader shuffle for Origami shard backend; "
+                "using per-shard row_order.npy instead."
+            )
+        effective_shuffle = False
 
     logging.info(f"local_batch_size: {local_batch_size}")
     data_loader = TorchDataLoader(
         dataset,
         local_batch_size=local_batch_size,
         sharding=None if framework == "pytorch" else sharding,
-        shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
+        shuffle=effective_shuffle,
         sampler=sampler,
         num_batches=num_batches,
         num_workers=num_workers,
@@ -668,11 +679,22 @@ class TorchDataLoader:
                     yield jax.tree.map(torch.as_tensor, batch)
 
 
+def _stack_tree(items):
+    first = items[0]
+    if isinstance(first, dict):
+        return {key: _stack_tree([item[key] for item in items]) for key in first}
+    if isinstance(first, tuple):
+        return tuple(_stack_tree([item[index] for item in items]) for index in range(len(first)))
+    if isinstance(first, list):
+        return [_stack_tree([item[index] for item in items]) for index in range(len(first))]
+    return np.stack([np.asarray(item) for item in items], axis=0)
+
+
 def _collate_fn(items):
     """Collate the batch elements into batched numpy arrays."""
-    # Make sure to convert to numpy arrays before stacking since some of the incoming elements
-    # may be JAX arrays.
-    return jax.tree.map(lambda *xs: np.stack([np.asarray(x) for x in xs], axis=0), *items)
+    # Keep this pure NumPy because PyTorch executes collate_fn inside DataLoader
+    # workers when num_workers > 0.
+    return _stack_tree(items)
 
 
 def _worker_init_fn(worker_id: int) -> None:
