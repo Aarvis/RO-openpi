@@ -2642,18 +2642,18 @@ _CONFIGS = [
         data=OrigamiCompActionChunkDataConfig(
             repo_id="local/origami_comp_action_chunk",
             assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk"),
-            dataset_root="/data/RO-competition-paper-dataset",
+            dataset_root="/home/ubuntu/workspace/RO-competition-paper-dataset",
             manifest_root=(
-                "/data/RO-competition-paper-dataset/"
+                "/home/ubuntu/workspace/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             prompt="fold paper into airplane",
             planner_branch="posterior",
             planner_value_variant="final",
             tactile_filename="tactile_60d.npy",
-            dataset_backend="video",
+            dataset_backend="shard",
             shard_root=(
-                "/data/RO-competition-paper-dataset/"
+                "/home/ubuntu/workspace/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             shard_manifest_name="shard_manifest.json",
@@ -2696,7 +2696,7 @@ _CONFIGS = [
                 frame_stride=1,
                 keep_horizon_clipped=False,
                 planner_export_root=(
-                    "/data/RO-competition-paper-dataset/metadata/checkpoint_planner_vla_rollout_exports/no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
+                    "/home/ubuntu/workspace/RO-competition-paper-dataset/metadata/checkpoint_planner_vla_rollout_exports/no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
                 ),
                 planner_assignment_mode="episode_sampled",
                 train_planner_view_modes=("frame_stride_10", "fixed_7", "fixed_15", "random_mix"),
@@ -2735,7 +2735,7 @@ _CONFIGS = [
             ),
             shard_build=OrigamiCompActionChunkShardBuildConfig(
                 shard_root=(
-                    "/data/RO-competition-paper-dataset/"
+                    "/home/ubuntu/workspace/RO-competition-paper-dataset/"
                     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
                 ),
                 split="train",
@@ -2777,13 +2777,13 @@ _CONFIGS = [
                 ),
                 weight_loaders.NpzSubsetWeightLoader(
                     (
-                        "/data/RO-competition-paper-dataset/metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/openpi_origami_planner_adapter_prefixed_params.npz"
+                        "/home/ubuntu/workspace/RO-competition-paper-dataset/metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/openpi_origami_planner_adapter_prefixed_params.npz"
                     ),
                     strict=True,
                 ),
                 weight_loaders.OrbaxSubsetWeightLoader(
                     (
-                        "/data/RO-competition-paper-dataset/metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
+                        "/home/ubuntu/workspace/RO-competition-paper-dataset/metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
                     ),
                     key_prefix="origami_ftp_tactile_prefix_encoder",
                     strict=True,
@@ -2791,9 +2791,9 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=2_000,
+            warmup_steps=300,
             peak_lr=8e-5,
-            decay_steps=560_000,
+            decay_steps=17500,
             decay_lr=1e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
@@ -2804,9 +2804,9 @@ _CONFIGS = [
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder.*", multiplier=1.5),
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
         ),
-        batch_size=5,
+        batch_size=160,
         num_workers=0,
-        num_train_steps=560_000,
+        num_train_steps=17500,
         log_interval=50,
         run_val=False,
         val_repo_id=None,
@@ -2814,9 +2814,9 @@ _CONFIGS = [
         val_batch_size=32,
         checkpoint_strategy="manual",
         # save_interval=5_000,
-        save_steps=(150, 1000, 70000),
+        save_steps=(1000, 2000, 4000, 8750, 10000, 15_000),
         # keep_period=10_000,
-        max_to_keep=4,
+        max_to_keep=8,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
