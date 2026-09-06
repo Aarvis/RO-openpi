@@ -14,6 +14,7 @@ from openpi.shared import normalize as _normalize
 
 DataDict: TypeAlias = at.PyTree
 NormStats: TypeAlias = _normalize.NormStats
+OrigamiSplineSpanRepresentation: TypeAlias = str
 
 
 T = TypeVar("T")
@@ -191,24 +192,36 @@ class Unnormalize(DataTransformFn):
         return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
 
 
+def _span_widths_to_centered_logits_np(widths: np.ndarray, *, eps: float = 1.0e-6) -> np.ndarray:
+    widths = np.asarray(widths, dtype=np.float32)
+    logits = np.log(np.clip(widths, eps, None))
+    return logits - np.mean(logits, axis=-1, keepdims=True)
+
+
 @dataclasses.dataclass(frozen=True)
 class OrigamiSplineNormalize(DataTransformFn):
     """Normalize Origami VLA packed spline actions with separate control-point and span stats."""
 
     state_stats: NormStats | None
+    tactile_prompt_stats: NormStats | None
     control_point_stats: NormStats | None
-    span_width_stats: NormStats | None
+    span_stats: NormStats | None
     max_control_points: int
     max_span_count: int
+    span_representation: OrigamiSplineSpanRepresentation = "physical_widths"
     use_quantiles: bool = False
     strict: bool = False
 
     def __post_init__(self):
+        if self.span_representation not in ("physical_widths", "logits"):
+            raise ValueError(f"Unsupported Origami spline span representation: {self.span_representation!r}")
+        span_stats_name = "actions_span_logits" if self.span_representation == "logits" else "actions_span_widths"
         if self.use_quantiles:
             for name, stats in (
                 ("state", self.state_stats),
+                ("tactile_prompt", self.tactile_prompt_stats),
                 ("actions_control_points", self.control_point_stats),
-                ("actions_span_widths", self.span_width_stats),
+                (span_stats_name, self.span_stats),
             ):
                 if stats is None:
                     continue
@@ -225,15 +238,24 @@ class OrigamiSplineNormalize(DataTransformFn):
         elif self.strict and self.state_stats is not None:
             raise ValueError("OrigamiSplineNormalize expected a 'state' key in the data.")
 
+        if "tactile_prompt" in data:
+            if self.tactile_prompt_stats is None:
+                if self.strict:
+                    raise ValueError("OrigamiSplineNormalize expected tactile_prompt stats but none were provided.")
+            else:
+                data["tactile_prompt"] = self._apply(np.asarray(data["tactile_prompt"]), self.tactile_prompt_stats)
+        elif self.strict and self.tactile_prompt_stats is not None:
+            raise ValueError("OrigamiSplineNormalize expected a 'tactile_prompt' key in the data.")
+
         if "actions" in data:
-            if self.control_point_stats is None or self.span_width_stats is None:
+            if self.control_point_stats is None or self.span_stats is None:
                 if self.strict:
                     raise ValueError(
-                        "OrigamiSplineNormalize expected both control-point and span-width stats for packed actions."
+                        "OrigamiSplineNormalize expected both control-point and span stats for packed actions."
                     )
                 return data
             data["actions"] = self._normalize_actions(np.asarray(data["actions"]))
-        elif self.strict and (self.control_point_stats is not None or self.span_width_stats is not None):
+        elif self.strict and (self.control_point_stats is not None or self.span_stats is not None):
             raise ValueError("OrigamiSplineNormalize expected an 'actions' key in the data.")
         return data
 
@@ -257,10 +279,10 @@ class OrigamiSplineNormalize(DataTransformFn):
                 f"Packed Origami actions must have at least {self.max_control_points + 1} rows, "
                 f"got shape {normalized.shape}."
             )
-        normalized[..., self.max_control_points, : self.max_span_count] = self._apply(
-            normalized[..., self.max_control_points, : self.max_span_count],
-            self.span_width_stats,
-        )
+        spans = normalized[..., self.max_control_points, : self.max_span_count]
+        if self.span_representation == "logits":
+            spans = _span_widths_to_centered_logits_np(spans)
+        normalized[..., self.max_control_points, : self.max_span_count] = self._apply(spans, self.span_stats)
         return normalized
 
 
@@ -269,18 +291,24 @@ class OrigamiSplineUnnormalize(DataTransformFn):
     """Inverse of OrigamiSplineNormalize for packed spline actions."""
 
     state_stats: NormStats | None
+    tactile_prompt_stats: NormStats | None
     control_point_stats: NormStats | None
-    span_width_stats: NormStats | None
+    span_stats: NormStats | None
     max_control_points: int
     max_span_count: int
+    span_representation: OrigamiSplineSpanRepresentation = "physical_widths"
     use_quantiles: bool = False
 
     def __post_init__(self):
+        if self.span_representation not in ("physical_widths", "logits"):
+            raise ValueError(f"Unsupported Origami spline span representation: {self.span_representation!r}")
+        span_stats_name = "actions_span_logits" if self.span_representation == "logits" else "actions_span_widths"
         if self.use_quantiles:
             for name, stats in (
                 ("state", self.state_stats),
+                ("tactile_prompt", self.tactile_prompt_stats),
                 ("actions_control_points", self.control_point_stats),
-                ("actions_span_widths", self.span_width_stats),
+                (span_stats_name, self.span_stats),
             ):
                 if stats is None:
                     continue
@@ -290,7 +318,9 @@ class OrigamiSplineUnnormalize(DataTransformFn):
     def __call__(self, data: DataDict) -> DataDict:
         if "state" in data and self.state_stats is not None:
             data["state"] = self._apply(np.asarray(data["state"]), self.state_stats)
-        if "actions" in data and self.control_point_stats is not None and self.span_width_stats is not None:
+        if "tactile_prompt" in data and self.tactile_prompt_stats is not None:
+            data["tactile_prompt"] = self._apply(np.asarray(data["tactile_prompt"]), self.tactile_prompt_stats)
+        if "actions" in data and self.control_point_stats is not None and self.span_stats is not None:
             data["actions"] = self._unnormalize_actions(np.asarray(data["actions"]))
         return data
 
@@ -316,7 +346,7 @@ class OrigamiSplineUnnormalize(DataTransformFn):
             )
         unnormalized[..., self.max_control_points, : self.max_span_count] = self._apply(
             unnormalized[..., self.max_control_points, : self.max_span_count],
-            self.span_width_stats,
+            self.span_stats,
         )
         return unnormalized
 
@@ -328,17 +358,26 @@ def make_normalize_transform(
     strict: bool = False,
     origami_max_control_points: int | None = None,
     origami_max_span_count: int | None = None,
+    origami_action_mode: str | None = None,
+    origami_spline_span_representation: OrigamiSplineSpanRepresentation = "physical_widths",
 ) -> DataTransformFn:
-    if origami_max_control_points is not None or origami_max_span_count is not None:
+    if origami_action_mode == "spline" and (
+        origami_max_control_points is not None or origami_max_span_count is not None
+    ):
         if origami_max_control_points is None or origami_max_span_count is None:
             raise ValueError("Both origami_max_control_points and origami_max_span_count must be provided together.")
         stats_dict = norm_stats or {}
+        span_key = (
+            "actions_span_logits" if origami_spline_span_representation == "logits" else "actions_span_widths"
+        )
         return OrigamiSplineNormalize(
             state_stats=stats_dict.get("state"),
+            tactile_prompt_stats=stats_dict.get("tactile_prompt"),
             control_point_stats=stats_dict.get("actions_control_points"),
-            span_width_stats=stats_dict.get("actions_span_widths"),
+            span_stats=stats_dict.get(span_key),
             max_control_points=origami_max_control_points,
             max_span_count=origami_max_span_count,
+            span_representation=origami_spline_span_representation,
             use_quantiles=use_quantiles,
             strict=strict,
         )
@@ -351,17 +390,26 @@ def make_unnormalize_transform(
     use_quantiles: bool = False,
     origami_max_control_points: int | None = None,
     origami_max_span_count: int | None = None,
+    origami_action_mode: str | None = None,
+    origami_spline_span_representation: OrigamiSplineSpanRepresentation = "physical_widths",
 ) -> DataTransformFn:
-    if origami_max_control_points is not None or origami_max_span_count is not None:
+    if origami_action_mode == "spline" and (
+        origami_max_control_points is not None or origami_max_span_count is not None
+    ):
         if origami_max_control_points is None or origami_max_span_count is None:
             raise ValueError("Both origami_max_control_points and origami_max_span_count must be provided together.")
         stats_dict = norm_stats or {}
+        span_key = (
+            "actions_span_logits" if origami_spline_span_representation == "logits" else "actions_span_widths"
+        )
         return OrigamiSplineUnnormalize(
             state_stats=stats_dict.get("state"),
+            tactile_prompt_stats=stats_dict.get("tactile_prompt"),
             control_point_stats=stats_dict.get("actions_control_points"),
-            span_width_stats=stats_dict.get("actions_span_widths"),
+            span_stats=stats_dict.get(span_key),
             max_control_points=origami_max_control_points,
             max_span_count=origami_max_span_count,
+            span_representation=origami_spline_span_representation,
             use_quantiles=use_quantiles,
         )
     return Unnormalize(norm_stats, use_quantiles=use_quantiles)

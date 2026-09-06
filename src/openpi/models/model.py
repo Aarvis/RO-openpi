@@ -92,6 +92,7 @@ IMAGE_RESOLUTION = (224, 224)
 #     "tactile": float32[*b, 60],  # Optional, low-dimensional tactile wrench vector
 #     "planner_available": bool[*b],  # Optional, masks checkpoint-planner prefix tokens when absent
 #     "tactile_deform_images": uint8|float32[*b, 10, 3, 224, 224],  # Optional tactile image crops
+#     "tactile_deform_available": bool[*b],  # Optional deform tactile image availability mask
 #     "tactile_raw_images": uint8|float32[*b, 10, 3, 224, 224],  # Optional tactile image crops
 #     "tactile_raw_available": bool[*b],  # Optional raw tactile image availability mask
 #     "tokenized_prompt": int32[*b, l],  # Optional, tokenized language prompt
@@ -148,6 +149,7 @@ class Observation(Generic[ArrayT]):
     tactile: at.Float[ArrayT, "*b tactile"] | None = None
     # Optional tactile image crops used by FTP/SharpaWave tactile prefix variants.
     tactile_deform_images: at.Array | None = None
+    tactile_deform_available: at.Bool[ArrayT, "*b"] | None = None
     tactile_raw_images: at.Array | None = None
     tactile_raw_available: at.Bool[ArrayT, "*b"] | None = None
 
@@ -195,6 +197,7 @@ class Observation(Generic[ArrayT]):
             planner_available=data.get("planner_available"),
             tactile=data.get("tactile"),
             tactile_deform_images=data.get("tactile_deform_images"),
+            tactile_deform_available=data.get("tactile_deform_available"),
             tactile_raw_images=data.get("tactile_raw_images"),
             tactile_raw_available=data.get("tactile_raw_available"),
             tokenized_prompt=data.get("tokenized_prompt"),
@@ -290,6 +293,7 @@ def preprocess_observation(
         planner_available=observation.planner_available,
         tactile=observation.tactile,
         tactile_deform_images=observation.tactile_deform_images,
+        tactile_deform_available=observation.tactile_deform_available,
         tactile_raw_images=observation.tactile_raw_images,
         tactile_raw_available=observation.tactile_raw_available,
         tokenized_prompt=observation.tokenized_prompt,

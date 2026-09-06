@@ -189,6 +189,14 @@ def create_trained_policy(
     normalize_transform = transforms.make_normalize_transform(
         norm_stats,
         use_quantiles=data_config.use_quantile_norm,
+        origami_action_mode=(
+            data_config.origami_vla.action_source if data_config.origami_vla is not None else None
+        ),
+        origami_spline_span_representation=(
+            data_config.origami_vla.spline_span_representation
+            if data_config.origami_vla is not None
+            else "physical_widths"
+        ),
         origami_max_control_points=(
             data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
         ),
@@ -199,6 +207,14 @@ def create_trained_policy(
     unnormalize_transform = transforms.make_unnormalize_transform(
         norm_stats,
         use_quantiles=data_config.use_quantile_norm,
+        origami_action_mode=(
+            data_config.origami_vla.action_source if data_config.origami_vla is not None else None
+        ),
+        origami_spline_span_representation=(
+            data_config.origami_vla.spline_span_representation
+            if data_config.origami_vla is not None
+            else "physical_widths"
+        ),
         origami_max_control_points=(
             data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
         ),

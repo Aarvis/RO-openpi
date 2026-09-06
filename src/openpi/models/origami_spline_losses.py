@@ -88,6 +88,17 @@ def _positive_normalized_widths(raw_widths: jax.Array, mask: jax.Array, *, min_w
     return positive / denom
 
 
+def _masked_softmax_widths(logits: jax.Array, mask: jax.Array, *, min_width: float) -> jax.Array:
+    mask = jnp.asarray(mask, dtype=jnp.bool_)
+    logits = jnp.asarray(logits, dtype=jnp.float32)
+    masked_logits = jnp.where(mask, logits, -jnp.inf)
+    max_logits = jnp.max(masked_logits, axis=-1, keepdims=True)
+    max_logits = jnp.where(jnp.isfinite(max_logits), max_logits, 0.0)
+    exp_logits = jnp.exp(masked_logits - max_logits) * jnp.asarray(mask, dtype=jnp.float32)
+    denom = jnp.clip(jnp.sum(exp_logits, axis=-1, keepdims=True), a_min=min_width)
+    return exp_logits / denom
+
+
 def _build_clamped_knots(
     widths: jax.Array,
     span_mask: jax.Array,
@@ -193,7 +204,10 @@ def compute_auxiliary_losses(
     start_weight: float,
     end_weight: float,
     width_weight: float,
+    span_representation: str = "physical_widths",
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
+    if span_representation not in ("physical_widths", "logits"):
+        raise ValueError(f"Unsupported spline span representation: {span_representation!r}")
     if all(weight <= 0.0 for weight in (curve_weight, start_weight, end_weight, width_weight)):
         zeros = jnp.zeros((pred_actions_norm.shape[0],), dtype=jnp.float32)
         return zeros, {
@@ -232,13 +246,25 @@ def compute_auxiliary_losses(
     pred_control = jnp.where(control_mask, pred_control, 0.0)
     target_control = jnp.where(control_mask, target_control, 0.0)
 
-    pred_widths = _positive_normalized_widths(
-        pred_actions[:, max_control_points, :max_span_count],
-        jnp.asarray(span_mask, dtype=pred_actions.dtype),
-        min_width=width_min,
-    )
-    target_widths = jnp.where(span_mask, target_actions[:, max_control_points, :max_span_count], 0.0)
-    target_widths = target_widths / jnp.clip(jnp.sum(target_widths, axis=-1, keepdims=True), a_min=width_min)
+    if span_representation == "logits":
+        pred_widths = _masked_softmax_widths(
+            pred_actions[:, max_control_points, :max_span_count],
+            span_mask,
+            min_width=width_min,
+        )
+        target_widths = _masked_softmax_widths(
+            target_actions[:, max_control_points, :max_span_count],
+            span_mask,
+            min_width=width_min,
+        )
+    else:
+        pred_widths = _positive_normalized_widths(
+            pred_actions[:, max_control_points, :max_span_count],
+            jnp.asarray(span_mask, dtype=pred_actions.dtype),
+            min_width=width_min,
+        )
+        target_widths = jnp.where(span_mask, target_actions[:, max_control_points, :max_span_count], 0.0)
+        target_widths = target_widths / jnp.clip(jnp.sum(target_widths, axis=-1, keepdims=True), a_min=width_min)
 
     u = jnp.linspace(0.0, 1.0, sample_count, dtype=jnp.float32)
     pred_curve = evaluate_batch_splines(

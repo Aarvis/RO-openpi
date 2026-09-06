@@ -138,6 +138,7 @@ def settings_from_data_factory(data_factory: Any, model_config: Any) -> _origami
         action_horizon=model_config.action_horizon,
         max_span_count=model_config.origami_vla.max_span_count,
         degree=model_config.origami_vla.degree,
+        spline_span_representation=model_config.origami_vla.spline_span_representation,
         state_dim=int(model_config.state_dim or model_config.action_dim),
         action_dim=model_config.action_dim,
         tactile_dim=model_config.origami_vla.tactile_dim,
@@ -467,6 +468,12 @@ class OrigamiCompActionChunkShardDataset:
         if self._settings.load_tactile_images:
             arrays["tactile_deform_images"] = np.load(arrays_dir / "tactile_deform_images.npy", mmap_mode="r")
             arrays["tactile_raw_images"] = np.load(arrays_dir / "tactile_raw_images.npy", mmap_mode="r")
+            deform_path = arrays_dir / "tactile_deform_available.npy"
+            arrays["tactile_deform_available"] = (
+                np.load(deform_path, mmap_mode="r")
+                if deform_path.exists()
+                else np.ones((spec.num_rows,), dtype=bool)
+            )
             arrays["tactile_raw_available"] = np.load(arrays_dir / "tactile_raw_available.npy", mmap_mode="r")
         if self._settings.include_planner_features:
             arrays["planner_available"] = np.load(arrays_dir / "planner_available.npy", mmap_mode="r")
@@ -562,6 +569,9 @@ class OrigamiCompActionChunkShardDataset:
                         dtype=np.uint8,
                     ),
                     "tactile_raw_images": np.asarray(arrays["tactile_raw_images"][physical_index], dtype=np.uint8),
+                    "tactile_deform_available": np.asarray(
+                        arrays["tactile_deform_available"][physical_index], dtype=bool
+                    ),
                     "tactile_raw_available": np.asarray(arrays["tactile_raw_available"][physical_index], dtype=bool),
                 }
             )

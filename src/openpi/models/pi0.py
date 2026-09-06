@@ -114,6 +114,8 @@ class FutureLatentPolicyAdapter(nnx.Module):
 
 def _load_origami_action_stats(
     stats_dir: str | None,
+    *,
+    span_representation: str = "physical_widths",
 ) -> _origami_spline_losses.PackedActionNormStats | None:
     if not stats_dir:
         return None
@@ -124,12 +126,13 @@ def _load_origami_action_stats(
             f"Origami VLA action normalization stats were not found under {stats_dir}. "
             "Run scripts/compute_origami_vla_norm_stats.py before training."
         ) from exc
-    required_keys = ("actions_control_points", "actions_span_widths")
+    span_key = "actions_span_logits" if span_representation == "logits" else "actions_span_widths"
+    required_keys = ("actions_control_points", span_key)
     missing = [key for key in required_keys if key not in loaded]
     if missing:
         raise KeyError(
             f"Missing Origami packed-action normalization stats {missing} under {stats_dir}. "
-            "Re-run scripts/compute_origami_vla_norm_stats.py to generate separate control-point and span stats."
+            "Re-run the matching Origami spline norm-stats script to generate separate control-point and span stats."
         )
 
     def _convert(stats: _normalize.NormStats) -> _origami_spline_losses.ActionNormStats:
@@ -150,7 +153,7 @@ def _load_origami_action_stats(
     logger.info("Loaded Origami packed action normalization stats from %s", stats_dir)
     return _origami_spline_losses.PackedActionNormStats(
         control_points=_convert(loaded["actions_control_points"]),
-        span_widths=_convert(loaded["actions_span_widths"]),
+        span_widths=_convert(loaded[span_key]),
     )
 
 
@@ -178,7 +181,10 @@ class Pi0(_model.BaseModel):
         self.robot_spline_config = config.robot_spline
         self.origami_vla_config = config.origami_vla
         self.origami_action_stats = (
-            _load_origami_action_stats(config.origami_vla.action_norm_stats_dir)
+            _load_origami_action_stats(
+                config.origami_vla.action_norm_stats_dir,
+                span_representation=config.origami_vla.spline_span_representation,
+            )
             if config.origami_vla.enabled
             and config.origami_vla.action_mode == "spline"
             and not config.origami_vla.disable_auxiliary_losses
@@ -503,10 +509,25 @@ class Pi0(_model.BaseModel):
                     raise ValueError(
                         "Origami FTP tactile prefix conditioning is enabled, but tactile_deform_images is missing."
                     )
+                deform_images = jnp.asarray(obs.tactile_deform_images)
+                if obs.tactile_deform_available is None:
+                    deform_available = jnp.ones((deform_images.shape[0],), dtype=jnp.bool_)
+                else:
+                    deform_available = jnp.asarray(obs.tactile_deform_available, dtype=jnp.bool_)
+                deform_image_mask = deform_available.reshape(
+                    (deform_images.shape[0],) + (1,) * (deform_images.ndim - 1)
+                )
+                deform_images = jnp.where(deform_image_mask, deform_images, jnp.zeros_like(deform_images))
+                raw_available = None
+                if obs.tactile_raw_available is not None:
+                    raw_available = jnp.logical_and(
+                        jnp.asarray(obs.tactile_raw_available, dtype=jnp.bool_),
+                        deform_available,
+                    )
                 ftp_tactile_tokens = self.origami_ftp_tactile_prefix_encoder(
-                    jnp.asarray(obs.tactile_deform_images),
+                    deform_images,
                     None if obs.tactile_raw_images is None else jnp.asarray(obs.tactile_raw_images),
-                    None if obs.tactile_raw_available is None else jnp.asarray(obs.tactile_raw_available),
+                    raw_available,
                     # Keep the pretrained tactile prefix path deterministic inside Pi0.5.
                     # The non-frozen tactile weights still receive gradients from the VLA loss.
                     train=False,
@@ -514,7 +535,7 @@ class Pi0(_model.BaseModel):
                 if tokens:
                     ftp_tactile_tokens = ftp_tactile_tokens.astype(tokens[0].dtype)
                 tokens.append(ftp_tactile_tokens)
-                input_mask.append(jnp.ones(ftp_tactile_tokens.shape[:2], dtype=jnp.bool_))
+                input_mask.append(jnp.broadcast_to(deform_available[:, None], ftp_tactile_tokens.shape[:2]))
                 ar_mask += [False] * ftp_tactile_tokens.shape[1]
 
         if not tokens:
@@ -639,7 +660,11 @@ class Pi0(_model.BaseModel):
                 "loss_total": base_loss_mean,
                 "loss_base_flow": base_loss_mean,
             }
-        if self.origami_vla_config.disable_auxiliary_losses or self.origami_vla_config.action_mode != "spline":
+        if (
+            self.origami_vla_config.disable_auxiliary_losses
+            or not self.origami_vla_config.compute_auxiliary_metrics
+            or self.origami_vla_config.action_mode != "spline"
+        ):
             zero = jnp.asarray(0.0, dtype=base_loss.dtype)
             return base_loss, {
                 "loss": base_loss_mean,
@@ -673,8 +698,12 @@ class Pi0(_model.BaseModel):
             start_weight=self.origami_vla_config.start_loss_weight,
             end_weight=self.origami_vla_config.end_loss_weight,
             width_weight=self.origami_vla_config.width_loss_weight,
+            span_representation=self.origami_vla_config.spline_span_representation,
         )
-        total_loss = base_loss + aux_loss[:, None]
+        if self.origami_vla_config.backprop_auxiliary_losses:
+            total_loss = base_loss + aux_loss[:, None]
+        else:
+            total_loss = base_loss + jax.lax.stop_gradient(aux_loss)[:, None]
 
         curve_raw = reduce_metric(aux_terms["curve"])
         start_raw = reduce_metric(aux_terms["start"])

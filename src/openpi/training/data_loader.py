@@ -16,6 +16,7 @@ import openpi.models.model as _model
 import openpi.training.config as _config
 import openpi.training.future_latent_sidecar as _future_latent_sidecar
 import openpi.training.origami_comp_action_chunk_shards as _origami_comp_action_chunk_shards
+import openpi.training.origami_comp_action_spline_shards as _origami_comp_action_spline_shards
 import openpi.training.origami_vla_dataset as _origami_vla_dataset
 import openpi.training.robot_spline_sidecar as _robot_spline_sidecar
 import openpi.transforms as _transforms
@@ -163,6 +164,10 @@ def create_torch_dataset(
     """Create a dataset for training."""
     if data_config.origami_vla is not None:
         if data_config.origami_vla.dataset_backend == "shard":
+            if data_config.origami_vla.action_source == "spline":
+                return _origami_comp_action_spline_shards.OrigamiCompActionSplineShardDataset(
+                    data_config.origami_vla, split=data_config.dataset_split
+                )
             return _origami_comp_action_chunk_shards.OrigamiCompActionChunkShardDataset(
                 data_config.origami_vla, split=data_config.dataset_split
             )
@@ -233,6 +238,14 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
     normalize_transform = _transforms.make_normalize_transform(
         norm_stats,
         use_quantiles=data_config.use_quantile_norm,
+        origami_action_mode=(
+            data_config.origami_vla.action_source if data_config.origami_vla is not None else None
+        ),
+        origami_spline_span_representation=(
+            data_config.origami_vla.spline_span_representation
+            if data_config.origami_vla is not None
+            else "physical_widths"
+        ),
         origami_max_control_points=(
             data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
         ),
@@ -275,6 +288,14 @@ def transform_iterable_dataset(
     normalize_transform = _transforms.make_normalize_transform(
         norm_stats,
         use_quantiles=data_config.use_quantile_norm,
+        origami_action_mode=(
+            data_config.origami_vla.action_source if data_config.origami_vla is not None else None
+        ),
+        origami_spline_span_representation=(
+            data_config.origami_vla.spline_span_representation
+            if data_config.origami_vla is not None
+            else "physical_widths"
+        ),
         origami_max_control_points=(
             data_config.origami_vla.max_control_points if data_config.origami_vla is not None else None
         ),

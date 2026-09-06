@@ -35,6 +35,7 @@ class OrigamiVlaSettings:
     action_horizon: int = 19
     max_span_count: int = 15
     degree: int = 3
+    spline_span_representation: Literal["physical_widths", "logits"] = "physical_widths"
     state_dim: int = 65
     action_dim: int = 65
     tactile_dim: int = 60
@@ -107,6 +108,11 @@ class OrigamiVlaSettings:
             raise ValueError(f"action_chunk_stride must be positive, got {self.action_chunk_stride}")
         if self.action_horizon <= 0:
             raise ValueError(f"action_horizon must be positive, got {self.action_horizon}")
+        if self.spline_span_representation not in ("physical_widths", "logits"):
+            raise ValueError(
+                "spline_span_representation must be 'physical_widths' or 'logits', "
+                f"got {self.spline_span_representation!r}"
+            )
         if "/" in self.planner_branch or "\\" in self.planner_branch:
             raise ValueError(f"planner_branch must be a simple branch name, got {self.planner_branch!r}")
         if self.planner_value_variant not in {"final", "raw"}:
@@ -527,6 +533,17 @@ class OrigamiVlaDataset:
         value = int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "little") / float(1 << 64)
         return value < probability
 
+    def _drop_tactile_image_input(self, episode_uid: str, frame_position: int) -> bool:
+        probability = float(self._settings.tactile_image_input_dropout_prob)
+        if probability <= 0.0:
+            return False
+        if probability >= 1.0:
+            return True
+        seed = int(self._settings.tactile_image_dropout_seed)
+        payload = f"{seed}:{episode_uid}:{int(frame_position)}:all_tactile".encode("utf-8")
+        value = int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "little") / float(1 << 64)
+        return value < probability
+
     def _read_tactile_images(self, bundle: _EpisodeBundle, frame_position: int, episode_uid: str) -> dict[str, np.ndarray]:
         deform_path = bundle.episode_root / self._settings.tactile_deform_video
         raw_path = bundle.episode_root / self._settings.tactile_raw_video
@@ -535,28 +552,39 @@ class OrigamiVlaDataset:
         if self._settings.tactile_require_raw_video and not raw_path.exists():
             raise FileNotFoundError(f"Missing required tactile raw video for {episode_uid}: {raw_path}")
 
-        deform_frame = self._read_video_frame(deform_path, frame_position)
-        deform_images = self._split_tactile_grid(deform_frame, self._settings.tactile_deform_grid, episode_uid)
-        raw_available = raw_path.exists()
-        if raw_available:
-            try:
-                raw_frame = self._read_video_frame(raw_path, frame_position)
-            except RuntimeError:
-                if self._settings.tactile_require_raw_video:
-                    raise
-                raw_available = False
-                raw_images = np.zeros_like(deform_images)
+        tactile_available = not self._drop_tactile_image_input(episode_uid, frame_position)
+        if tactile_available:
+            deform_frame = self._read_video_frame(deform_path, frame_position)
+            deform_images = self._split_tactile_grid(deform_frame, self._settings.tactile_deform_grid, episode_uid)
+            raw_available = raw_path.exists()
+            if raw_available:
+                try:
+                    raw_frame = self._read_video_frame(raw_path, frame_position)
+                except RuntimeError:
+                    if self._settings.tactile_require_raw_video:
+                        raise
+                    raw_available = False
+                    raw_images = np.zeros_like(deform_images)
+                else:
+                    raw_images = self._split_tactile_grid(raw_frame, self._settings.tactile_raw_grid, episode_uid)
             else:
-                raw_images = self._split_tactile_grid(raw_frame, self._settings.tactile_raw_grid, episode_uid)
-        else:
-            raw_images = np.zeros_like(deform_images)
+                raw_images = np.zeros_like(deform_images)
 
-        if raw_available and self._drop_tactile_raw_input(episode_uid, frame_position):
+            if raw_available and self._drop_tactile_raw_input(episode_uid, frame_position):
+                raw_images = np.zeros_like(deform_images)
+                raw_available = False
+        else:
+            fingers = int(self._settings.tactile_deform_grid["rows"]) * int(self._settings.tactile_deform_grid["cols"])
+            deform_images = np.zeros(
+                (fingers, 3, int(self._settings.tactile_image_size), int(self._settings.tactile_image_size)),
+                dtype=np.uint8,
+            )
             raw_images = np.zeros_like(deform_images)
             raw_available = False
 
         return {
             "tactile_deform_images": deform_images,
+            "tactile_deform_available": np.asarray(tactile_available, dtype=bool),
             "tactile_raw_images": raw_images,
             "tactile_raw_available": np.asarray(raw_available, dtype=bool),
         }

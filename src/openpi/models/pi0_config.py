@@ -105,6 +105,7 @@ class OrigamiVlaConfig:
     degree: int = 3
     max_control_points: int = 18
     max_span_count: int = 15
+    spline_span_representation: Literal["physical_widths", "logits"] = "physical_widths"
     curve_sample_count: int = 120
     smooth_l1_beta: float = 0.05
     curve_loss_weight: float = 0.5
@@ -114,6 +115,8 @@ class OrigamiVlaConfig:
     width_min: float = 1e-4
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
+    compute_auxiliary_metrics: bool = True
+    backprop_auxiliary_losses: bool = True
     disable_auxiliary_losses: bool = False
     tactile_prompt_input: bool = False
     prompt_discrete_clip: bool = False
@@ -171,6 +174,13 @@ class OrigamiVlaConfig:
     def __post_init__(self) -> None:
         if self.action_mode not in ("spline", "action_chunk"):
             raise ValueError(f"Unsupported Origami action_mode: {self.action_mode!r}")
+        if self.spline_span_representation not in ("physical_widths", "logits"):
+            raise ValueError(
+                "Origami spline_span_representation must be 'physical_widths' or 'logits', "
+                f"got {self.spline_span_representation!r}"
+            )
+        if self.action_mode != "spline" and self.spline_span_representation != "physical_widths":
+            raise ValueError("spline_span_representation='logits' is only valid for action_mode='spline'.")
         if self.speed_efficiency_weight_eps <= 0.0:
             raise ValueError("speed_efficiency_weight_eps must be > 0")
         if self.tactile_enabled or self.tactile_prompt_input:
@@ -396,6 +406,11 @@ class Pi0Config(_model.BaseModelConfig):
                         ],
                         jnp.uint8,
                     )
+                    if self.origami_vla.enabled and self.origami_vla.ftp_tactile_enabled
+                    else None
+                ),
+                tactile_deform_available=(
+                    jax.ShapeDtypeStruct([batch_size], jnp.bool_)
                     if self.origami_vla.enabled and self.origami_vla.ftp_tactile_enabled
                     else None
                 ),
