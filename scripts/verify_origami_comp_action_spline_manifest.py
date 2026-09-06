@@ -159,6 +159,8 @@ def _check_spline_rows(
     degree: int,
     failures: list[str],
 ) -> None:
+    if frame.empty:
+        return
     required = {
         "episode_uid",
         "frame_position",

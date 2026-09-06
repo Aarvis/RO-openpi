@@ -521,6 +521,10 @@ def main() -> int:
         use_speed_weights=speed_context is not None and speed_settings.weight_val,
         **common_kwargs,
     )
+    if train_frame.empty and not val_frame.empty:
+        train_frame = train_frame.reindex(columns=val_frame.columns)
+    if val_frame.empty and not train_frame.empty:
+        val_frame = val_frame.reindex(columns=train_frame.columns)
 
     output_root.mkdir(parents=True, exist_ok=True)
     train_path = output_root / args.train_index_name
