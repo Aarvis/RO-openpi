@@ -2913,6 +2913,7 @@ _CONFIGS.append(
                 start_loss_weight=0.01,
                 end_loss_weight=0.01,
                 width_loss_weight=0.01,
+                action_norm_stats_dir=None,
                 disable_auxiliary_losses=False,
             ),
         ),
