@@ -287,6 +287,7 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     manifest_root: str = "D:/Sampled_Reprocessed_Dataset/metadata/openpi_origami_vla/no_hmm_v1"
     prompt: str = "fold paper into airplane"
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
+    local_target_index_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state_index.parquet"
     action_source: Literal["spline", "action_chunk"] = "spline"
     action_filename: str = "action_65d.npy"
     action_chunk_stride: int = 1
@@ -333,6 +334,8 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     tactile_image_size: int = 224
     tactile_raw_input_dropout_prob: float = 0.0
     tactile_raw_dropout_seed: int = 1234
+    tactile_image_input_dropout_prob: float = 0.0
+    tactile_image_dropout_seed: int = 1234
     tactile_raw_grid: dict[str, Any] = dataclasses.field(
         default_factory=lambda: {
             "rows": 2,
@@ -369,6 +372,7 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             dataset_root=self.dataset_root,
             manifest_root=self.manifest_root,
             local_target_npz_name=self.local_target_npz_name,
+            local_target_index_name=self.local_target_index_name,
             action_source=self.action_source,
             action_filename=self.action_filename,
             action_chunk_stride=self.action_chunk_stride,
@@ -409,6 +413,8 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             tactile_image_size=self.tactile_image_size,
             tactile_raw_input_dropout_prob=self.tactile_raw_input_dropout_prob,
             tactile_raw_dropout_seed=self.tactile_raw_dropout_seed,
+            tactile_image_input_dropout_prob=self.tactile_image_input_dropout_prob,
+            tactile_image_dropout_seed=self.tactile_image_dropout_seed,
             tactile_raw_grid=dict(self.tactile_raw_grid),
             tactile_deform_grid=dict(self.tactile_deform_grid),
             include_planner_features=self.include_planner_features,
@@ -2874,6 +2880,56 @@ _CONFIGS = [
     *roboarena_config.get_roboarena_configs(),
     *polaris_config.get_polaris_configs(),
 ]
+
+_ORIGAMI_COMP_ACTION_CHUNK_CONFIG = next(
+    config for config in _CONFIGS if config.name == "pi05_origami_comp_action_chunk"
+)
+_ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/openpi_origami_comp_action_spline/no_hmm_224_headleft_tactile_prompt_planner"
+)
+_ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/openpi_origami_comp_action_spline_shards/no_hmm_224_headleft_tactile_prompt_planner"
+)
+_CONFIGS.append(
+    dataclasses.replace(
+        _ORIGAMI_COMP_ACTION_CHUNK_CONFIG,
+        name="pi05_origami_comp_action_spline",
+        model=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model,
+            action_horizon=14,
+            origami_vla=dataclasses.replace(
+                _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model.origami_vla,
+                action_mode="spline",
+                max_control_points=13,
+                max_span_count=10,
+                degree=3,
+                disable_auxiliary_losses=True,
+            ),
+        ),
+        data=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data,
+            repo_id="local/origami_comp_action_spline",
+            assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_spline"),
+            manifest_root=_ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT,
+            shard_root=_ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT,
+            action_source="spline",
+            local_target_npz_name="local_delta_action_cubic_knotspans10.npz",
+            local_target_index_name="local_delta_action_cubic_knotspans10_index.parquet",
+            action_filename="",
+            action_chunk_stride=1,
+            drop_horizon_clipped=True,
+            tactile_image_input_dropout_prob=0.0,
+            tactile_image_dropout_seed=4321,
+            shard_build=dataclasses.replace(
+                _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.shard_build,
+                shard_root=_ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT,
+            ),
+            data_transforms=NoOpTransformFactory(),
+        ),
+    )
+)
 
 if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
     raise ValueError("Config names must be unique.")

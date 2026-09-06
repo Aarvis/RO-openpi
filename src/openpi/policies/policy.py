@@ -142,9 +142,9 @@ class Policy(BasePolicy):
             outputs["state_joint"] = inputs["state_joint"]
         model_time = time.monotonic() - start_time
         if self._is_pytorch_model:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...].detach().cpu()), outputs)
+            outputs = jax.tree.map(lambda x: np.array(x[0, ...].detach().cpu(), copy=True), outputs)
         else:
-            outputs = jax.tree.map(lambda x: np.asarray(x[0, ...]), outputs)
+            outputs = jax.tree.map(lambda x: np.array(jax.device_get(x[0, ...]), copy=True), outputs)
 
         outputs = self._output_transform(outputs)
         outputs = _cast_msgpack_compatible(outputs)

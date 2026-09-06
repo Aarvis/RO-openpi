@@ -18,6 +18,7 @@ class OrigamiVlaSettings:
     manifest_train_name: str = "train_index.parquet"
     manifest_val_name: str = "val_index.parquet"
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
+    local_target_index_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state_index.parquet"
     planner_arrays_filename: str = "planner_vla_rollout_features.npz"
     planner_index_filename: str = "planner_vla_rollout_index.parquet"
     planner_branch: str = "alias"
@@ -74,6 +75,8 @@ class OrigamiVlaSettings:
     tactile_image_size: int = 224
     tactile_raw_input_dropout_prob: float = 0.0
     tactile_raw_dropout_seed: int = 1234
+    tactile_image_input_dropout_prob: float = 0.0
+    tactile_image_dropout_seed: int = 1234
     tactile_raw_grid: dict[str, Any] = dataclasses.field(
         default_factory=lambda: {
             "rows": 2,
@@ -122,6 +125,11 @@ class OrigamiVlaSettings:
             raise ValueError(
                 "tactile_raw_input_dropout_prob must satisfy 0 <= p <= 1, "
                 f"got {self.tactile_raw_input_dropout_prob}"
+            )
+        if not 0.0 <= self.tactile_image_input_dropout_prob <= 1.0:
+            raise ValueError(
+                "tactile_image_input_dropout_prob must satisfy 0 <= p <= 1, "
+                f"got {self.tactile_image_input_dropout_prob}"
             )
         if self.max_cached_episodes <= 0:
             raise ValueError(f"max_cached_episodes must be positive, got {self.max_cached_episodes}")
