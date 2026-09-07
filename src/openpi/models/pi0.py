@@ -675,6 +675,10 @@ class Pi0(_model.BaseModel):
                 "loss_start_raw": zero,
                 "loss_end_raw": zero,
                 "loss_width_raw": zero,
+                "metric_curve_mae_rad": zero,
+                "metric_start_mae_rad": zero,
+                "metric_end_mae_rad": zero,
+                "metric_width_mae": zero,
                 "loss_curve_weighted": zero,
                 "loss_start_weighted": zero,
                 "loss_end_weighted": zero,
@@ -709,6 +713,10 @@ class Pi0(_model.BaseModel):
         start_raw = reduce_metric(aux_terms["start"])
         end_raw = reduce_metric(aux_terms["end"])
         width_raw = reduce_metric(aux_terms["width"])
+        curve_mae_rad = reduce_metric(aux_terms["curve_mae_rad"])
+        start_mae_rad = reduce_metric(aux_terms["start_mae_rad"])
+        end_mae_rad = reduce_metric(aux_terms["end_mae_rad"])
+        width_mae = reduce_metric(aux_terms["width_mae"])
         aux_total = reduce_metric(aux_loss)
         total_mean = reduce_metric(total_loss)
 
@@ -721,6 +729,10 @@ class Pi0(_model.BaseModel):
             "loss_start_raw": start_raw,
             "loss_end_raw": end_raw,
             "loss_width_raw": width_raw,
+            "metric_curve_mae_rad": curve_mae_rad,
+            "metric_start_mae_rad": start_mae_rad,
+            "metric_end_mae_rad": end_mae_rad,
+            "metric_width_mae": width_mae,
             "loss_curve_weighted": self.origami_vla_config.curve_loss_weight * curve_raw,
             "loss_start_weighted": self.origami_vla_config.start_loss_weight * start_raw,
             "loss_end_weighted": self.origami_vla_config.end_loss_weight * end_raw,

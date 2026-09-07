@@ -215,6 +215,10 @@ def compute_auxiliary_losses(
             "start": zeros,
             "end": zeros,
             "width": zeros,
+            "curve_mae_rad": zeros,
+            "start_mae_rad": zeros,
+            "end_mae_rad": zeros,
+            "width_mae": zeros,
         }
 
     # Keep the spline auxiliary path in float32 even when the policy itself runs in
@@ -286,11 +290,23 @@ def compute_auxiliary_losses(
         u=u,
     )
 
-    curve_loss = jnp.mean(_smooth_l1(pred_curve - target_curve, smooth_l1_beta), axis=(1, 2))
-    start_loss = jnp.mean(_smooth_l1(pred_curve[:, 0, :] - target_curve[:, 0, :], smooth_l1_beta), axis=-1)
-    end_loss = jnp.mean(_smooth_l1(pred_curve[:, -1, :] - target_curve[:, -1, :], smooth_l1_beta), axis=-1)
+    curve_diff = pred_curve - target_curve
+    start_diff = pred_curve[:, 0, :] - target_curve[:, 0, :]
+    end_diff = pred_curve[:, -1, :] - target_curve[:, -1, :]
+    width_diff = pred_widths - target_widths
+
+    curve_loss = jnp.mean(_smooth_l1(curve_diff, smooth_l1_beta), axis=(1, 2))
+    start_loss = jnp.mean(_smooth_l1(start_diff, smooth_l1_beta), axis=-1)
+    end_loss = jnp.mean(_smooth_l1(end_diff, smooth_l1_beta), axis=-1)
     width_loss = jnp.sum(
-        _smooth_l1(pred_widths - target_widths, smooth_l1_beta) * jnp.asarray(span_mask, dtype=pred_widths.dtype),
+        _smooth_l1(width_diff, smooth_l1_beta) * jnp.asarray(span_mask, dtype=pred_widths.dtype),
+        axis=-1,
+    ) / jnp.clip(jnp.sum(jnp.asarray(span_mask, dtype=pred_widths.dtype), axis=-1), a_min=1.0)
+    curve_mae_rad = jnp.mean(jnp.abs(curve_diff), axis=(1, 2))
+    start_mae_rad = jnp.mean(jnp.abs(start_diff), axis=-1)
+    end_mae_rad = jnp.mean(jnp.abs(end_diff), axis=-1)
+    width_mae = jnp.sum(
+        jnp.abs(width_diff) * jnp.asarray(span_mask, dtype=pred_widths.dtype),
         axis=-1,
     ) / jnp.clip(jnp.sum(jnp.asarray(span_mask, dtype=pred_widths.dtype), axis=-1), a_min=1.0)
 
@@ -305,4 +321,8 @@ def compute_auxiliary_losses(
         "start": start_loss,
         "end": end_loss,
         "width": width_loss,
+        "curve_mae_rad": curve_mae_rad,
+        "start_mae_rad": start_mae_rad,
+        "end_mae_rad": end_mae_rad,
+        "width_mae": width_mae,
     }
