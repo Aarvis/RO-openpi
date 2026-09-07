@@ -88,15 +88,31 @@ def _positive_normalized_widths(raw_widths: jax.Array, mask: jax.Array, *, min_w
     return positive / denom
 
 
-def _masked_softmax_widths(logits: jax.Array, mask: jax.Array, *, min_width: float) -> jax.Array:
+def _masked_softmax_widths(
+    logits: jax.Array,
+    mask: jax.Array,
+    *,
+    min_width: float,
+    softmax_clip: float | None = None,
+    enforce_min_width: bool = False,
+) -> jax.Array:
     mask = jnp.asarray(mask, dtype=jnp.bool_)
     logits = jnp.asarray(logits, dtype=jnp.float32)
-    masked_logits = jnp.where(mask, logits, -jnp.inf)
+    if softmax_clip is not None:
+        logits = jnp.clip(logits, -softmax_clip, softmax_clip)
+    masked_logits = jnp.where(mask, logits, jnp.finfo(jnp.float32).min)
     max_logits = jnp.max(masked_logits, axis=-1, keepdims=True)
     max_logits = jnp.where(jnp.isfinite(max_logits), max_logits, 0.0)
     exp_logits = jnp.exp(masked_logits - max_logits) * jnp.asarray(mask, dtype=jnp.float32)
     denom = jnp.clip(jnp.sum(exp_logits, axis=-1, keepdims=True), a_min=min_width)
-    return exp_logits / denom
+    widths = exp_logits / denom
+    if not enforce_min_width or min_width <= 0.0:
+        return widths
+    valid = jnp.asarray(mask, dtype=jnp.float32)
+    valid_count = jnp.sum(valid, axis=-1, keepdims=True)
+    safe_min_width = jnp.minimum(min_width, 0.999 / jnp.clip(valid_count, a_min=1.0))
+    scale = jnp.clip(1.0 - valid_count * safe_min_width, a_min=0.0)
+    return jnp.where(mask, widths * scale + safe_min_width, 0.0)
 
 
 def _build_clamped_knots(
@@ -132,8 +148,9 @@ def _basis_matrix(
     degree: int,
     max_control_points: int,
     num_ctrl: jax.Array,
+    denominator_eps: float = 1e-6,
 ) -> jax.Array:
-    eps = 1e-6
+    eps = denominator_eps
     left = knots[:, :-1]
     right = knots[:, 1:]
     u_expanded = u[None, :, None]
@@ -175,6 +192,7 @@ def evaluate_batch_splines(
     max_control_points: int,
     max_span_count: int,
     u: jax.Array,
+    denominator_eps: float = 1e-6,
 ) -> jax.Array:
     knots, num_ctrl = _build_clamped_knots(widths, span_mask, degree=degree, max_span_count=max_span_count)
     basis = _basis_matrix(
@@ -183,8 +201,177 @@ def evaluate_batch_splines(
         degree=degree,
         max_control_points=max_control_points,
         num_ctrl=num_ctrl,
+        denominator_eps=denominator_eps,
     )
     return jnp.einsum("bsc,bcd->bsd", basis, control_points, precision=jax.lax.Precision.HIGHEST)
+
+
+def _sample_phases_from_intervals(intervals: int, *, include_endpoints: bool) -> jax.Array:
+    if include_endpoints:
+        return jnp.linspace(0.0, 1.0, intervals + 1, dtype=jnp.float32)
+    if intervals <= 1:
+        return jnp.asarray([0.5], dtype=jnp.float32)
+    return jnp.arange(1, intervals, dtype=jnp.float32) / jnp.asarray(intervals, dtype=jnp.float32)
+
+
+def decode_packed_spline_curve(
+    actions_norm: jax.Array,
+    action_mask: jax.Array,
+    *,
+    stats: PackedActionNormStats | None,
+    use_quantiles: bool,
+    degree: int,
+    max_control_points: int,
+    max_span_count: int,
+    u: jax.Array,
+    width_min: float,
+    span_representation: str = "physical_widths",
+    denominator_eps: float = 1e-6,
+    softmax_clip: float | None = None,
+    enforce_min_width: bool = False,
+) -> tuple[jax.Array, jax.Array]:
+    if span_representation not in ("physical_widths", "logits"):
+        raise ValueError(f"Unsupported spline span representation: {span_representation!r}")
+
+    actions_norm = jnp.asarray(actions_norm, dtype=jnp.float32)
+    actions = denormalize_packed_actions(
+        actions_norm,
+        stats=stats,
+        use_quantiles=use_quantiles,
+        max_control_points=max_control_points,
+        max_span_count=max_span_count,
+    )
+    control_mask = jnp.asarray(action_mask[:, :max_control_points, :], dtype=jnp.bool_)
+    span_mask = jnp.asarray(action_mask[:, max_control_points, :max_span_count], dtype=jnp.bool_)
+    control = jnp.where(control_mask, actions[:, :max_control_points, :], 0.0)
+
+    if span_representation == "logits":
+        widths = _masked_softmax_widths(
+            actions[:, max_control_points, :max_span_count],
+            span_mask,
+            min_width=width_min,
+            softmax_clip=softmax_clip,
+            enforce_min_width=enforce_min_width,
+        )
+    else:
+        widths = _positive_normalized_widths(
+            actions[:, max_control_points, :max_span_count],
+            jnp.asarray(span_mask, dtype=actions.dtype),
+            min_width=width_min,
+        )
+
+    curve = evaluate_batch_splines(
+        control,
+        widths,
+        span_mask,
+        degree=degree,
+        max_control_points=max_control_points,
+        max_span_count=max_span_count,
+        u=u,
+        denominator_eps=denominator_eps,
+    )
+    return curve, widths
+
+
+def compute_curve_flow_matching_loss(
+    flow_state_norm: jax.Array,
+    pred_velocity_norm: jax.Array,
+    target_velocity_norm: jax.Array,
+    action_mask: jax.Array,
+    *,
+    stats: PackedActionNormStats | None,
+    use_quantiles: bool,
+    degree: int,
+    max_control_points: int,
+    max_span_count: int,
+    sample_intervals: int,
+    include_endpoints: bool,
+    width_min: float,
+    denominator_eps: float,
+    softmax_clip: float | None,
+    loss_clip: float | None,
+    span_representation: str = "physical_widths",
+    separate_velocity_metrics: bool = False,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    action_mask_f32 = jnp.asarray(action_mask, dtype=jnp.float32)
+    flow_state_norm = jnp.asarray(flow_state_norm, dtype=jnp.float32) * action_mask_f32
+    pred_velocity_norm = jnp.asarray(pred_velocity_norm, dtype=jnp.float32) * action_mask_f32
+    target_velocity_norm = jnp.asarray(target_velocity_norm, dtype=jnp.float32) * action_mask_f32
+    u = _sample_phases_from_intervals(sample_intervals, include_endpoints=include_endpoints)
+
+    def decode_curve(values: jax.Array) -> jax.Array:
+        curve, _ = decode_packed_spline_curve(
+            values,
+            action_mask,
+            stats=stats,
+            use_quantiles=use_quantiles,
+            degree=degree,
+            max_control_points=max_control_points,
+            max_span_count=max_span_count,
+            u=u,
+            width_min=width_min,
+            span_representation=span_representation,
+            denominator_eps=denominator_eps,
+            softmax_clip=softmax_clip,
+            enforce_min_width=True,
+        )
+        return curve
+
+    if separate_velocity_metrics:
+        _, curve_velocity_pred = jax.jvp(decode_curve, (flow_state_norm,), (pred_velocity_norm,))
+        _, curve_velocity_target = jax.jvp(decode_curve, (flow_state_norm,), (target_velocity_norm,))
+        curve_velocity_error = curve_velocity_pred - curve_velocity_target
+        curve_jvp_norm_pred = jnp.sqrt(jnp.sum(jnp.square(curve_velocity_pred), axis=(1, 2)))
+        curve_jvp_norm_target = jnp.sqrt(jnp.sum(jnp.square(curve_velocity_target), axis=(1, 2)))
+        max_abs_curve_velocity_pred = jnp.max(jnp.abs(curve_velocity_pred), axis=(1, 2))
+        max_abs_curve_velocity_target = jnp.max(jnp.abs(curve_velocity_target), axis=(1, 2))
+    else:
+        velocity_error_norm = pred_velocity_norm - target_velocity_norm
+        _, curve_velocity_error = jax.jvp(decode_curve, (flow_state_norm,), (velocity_error_norm,))
+        zeros = jnp.zeros((flow_state_norm.shape[0],), dtype=jnp.float32)
+        curve_jvp_norm_pred = zeros
+        curve_jvp_norm_target = zeros
+        max_abs_curve_velocity_pred = zeros
+        max_abs_curve_velocity_target = zeros
+
+    curve_velocity_error = jnp.asarray(curve_velocity_error, dtype=jnp.float32)
+    sq_error = jnp.square(curve_velocity_error)
+    loss = jnp.mean(sq_error, axis=(1, 2))
+    if loss_clip is not None:
+        loss = jnp.minimum(loss, loss_clip)
+
+    _, widths = decode_packed_spline_curve(
+        flow_state_norm,
+        action_mask,
+        stats=stats,
+        use_quantiles=use_quantiles,
+        degree=degree,
+        max_control_points=max_control_points,
+        max_span_count=max_span_count,
+        u=u,
+        width_min=width_min,
+        span_representation=span_representation,
+        denominator_eps=denominator_eps,
+        softmax_clip=softmax_clip,
+        enforce_min_width=True,
+    )
+    span_mask = jnp.asarray(action_mask[:, max_control_points, :max_span_count], dtype=jnp.bool_)
+    valid_widths = jnp.where(span_mask, widths, jnp.inf)
+    min_predicted_span_width = jnp.min(valid_widths, axis=-1)
+    finite_mask = jnp.isfinite(loss) & jnp.all(jnp.isfinite(curve_velocity_error), axis=(1, 2))
+    curve_jvp_error_norm = jnp.sqrt(jnp.sum(sq_error, axis=(1, 2)))
+
+    return loss, {
+        "curve_fm_velocity_mae": jnp.mean(jnp.abs(curve_velocity_error), axis=(1, 2)),
+        "curve_fm_velocity_rms": jnp.sqrt(jnp.mean(sq_error, axis=(1, 2))),
+        "curve_fm_jvp_error_norm": curve_jvp_error_norm,
+        "curve_fm_jvp_norm_pred": curve_jvp_norm_pred,
+        "curve_fm_jvp_norm_target": curve_jvp_norm_target,
+        "curve_fm_max_abs_velocity_pred": max_abs_curve_velocity_pred,
+        "curve_fm_max_abs_velocity_target": max_abs_curve_velocity_target,
+        "curve_fm_min_predicted_span_width": min_predicted_span_width,
+        "curve_fm_finite": finite_mask.astype(jnp.float32),
+    }
 
 
 def compute_auxiliary_losses(

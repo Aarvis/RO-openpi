@@ -113,6 +113,17 @@ class OrigamiVlaConfig:
     end_loss_weight: float = 0.25
     width_loss_weight: float = 0.05
     width_min: float = 1e-4
+    curve_fm_enabled: bool = False
+    curve_fm_backprop: bool = False
+    curve_fm_loss_weight: float = 0.0
+    curve_fm_sample_intervals: int = 10
+    curve_fm_include_endpoints: bool = True
+    curve_fm_width_min: float = 1e-4
+    curve_fm_denominator_eps: float = 1e-6
+    curve_fm_softmax_clip: float | None = 30.0
+    curve_fm_loss_clip: float | None = None
+    curve_fm_separate_velocity_metrics: bool = False
+    mask_action_noise: bool = True
     action_norm_stats_dir: str | None = None
     use_quantile_norm: bool = True
     compute_auxiliary_metrics: bool = True
@@ -181,6 +192,22 @@ class OrigamiVlaConfig:
             )
         if self.action_mode != "spline" and self.spline_span_representation != "physical_widths":
             raise ValueError("spline_span_representation='logits' is only valid for action_mode='spline'.")
+        if self.curve_fm_backprop and not self.curve_fm_enabled:
+            raise ValueError("curve_fm_backprop=True requires curve_fm_enabled=True.")
+        if self.curve_fm_backprop and self.curve_fm_loss_weight <= 0.0:
+            raise ValueError("curve_fm_backprop=True requires curve_fm_loss_weight > 0.")
+        if self.curve_fm_enabled and self.action_mode != "spline":
+            raise ValueError("curve_fm_enabled=True is only valid for action_mode='spline'.")
+        if self.curve_fm_sample_intervals <= 0:
+            raise ValueError("curve_fm_sample_intervals must be positive.")
+        if self.curve_fm_width_min < 0.0:
+            raise ValueError("curve_fm_width_min must be >= 0.")
+        if self.curve_fm_denominator_eps <= 0.0:
+            raise ValueError("curve_fm_denominator_eps must be > 0.")
+        if self.curve_fm_softmax_clip is not None and self.curve_fm_softmax_clip <= 0.0:
+            raise ValueError("curve_fm_softmax_clip must be positive when set.")
+        if self.curve_fm_loss_clip is not None and self.curve_fm_loss_clip <= 0.0:
+            raise ValueError("curve_fm_loss_clip must be positive when set.")
         if self.speed_efficiency_weight_eps <= 0.0:
             raise ValueError("speed_efficiency_weight_eps must be > 0")
         if self.tactile_enabled or self.tactile_prompt_input:

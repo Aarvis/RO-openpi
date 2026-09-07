@@ -187,7 +187,7 @@ class Pi0(_model.BaseModel):
             )
             if config.origami_vla.enabled
             and config.origami_vla.action_mode == "spline"
-            and not config.origami_vla.disable_auxiliary_losses
+            and (not config.origami_vla.disable_auxiliary_losses or config.origami_vla.curve_fm_enabled)
             else None
         )
         self.origami_tactile_stats = (
@@ -608,10 +608,23 @@ class Pi0(_model.BaseModel):
 
         batch_shape = actions.shape[:-2]
         noise = jax.random.normal(noise_rng, actions.shape)
+        flow_action_mask = None
+        if (
+            self.origami_vla_config.enabled
+            and self.origami_vla_config.action_mode == "spline"
+            and self.origami_vla_config.mask_action_noise
+            and observation.action_mask is not None
+        ):
+            flow_action_mask = jnp.asarray(observation.action_mask, dtype=actions.dtype)
+            flow_action_mask = jnp.broadcast_to(flow_action_mask, actions.shape)
+            noise = noise * flow_action_mask
+            actions_for_flow = actions * flow_action_mask
+        else:
+            actions_for_flow = actions
         time = jax.random.beta(time_rng, 1.5, 1, batch_shape) * 0.999 + 0.001
         time_expanded = time[..., None, None]
-        x_t = time_expanded * noise + (1 - time_expanded) * actions
-        u_t = noise - actions
+        x_t = time_expanded * noise + (1 - time_expanded) * actions_for_flow
+        u_t = noise - actions_for_flow
 
         # one big forward pass of prefix + suffix at once
         prefix_tokens, prefix_mask, prefix_ar_mask = self.embed_prefix(observation, rng=future_rng, train=train)
@@ -671,6 +684,17 @@ class Pi0(_model.BaseModel):
                 "loss_total": base_loss_mean,
                 "loss_base_flow": base_loss_mean,
                 "loss_aux_total": zero,
+                "loss_curve_fm_raw": zero,
+                "loss_curve_fm_weighted": zero,
+                "metric_curve_fm_velocity_mae": zero,
+                "metric_curve_fm_velocity_rms": zero,
+                "metric_curve_fm_jvp_error_norm": zero,
+                "metric_curve_fm_jvp_norm_pred": zero,
+                "metric_curve_fm_jvp_norm_target": zero,
+                "metric_curve_fm_max_abs_velocity_pred": zero,
+                "metric_curve_fm_max_abs_velocity_target": zero,
+                "metric_curve_fm_min_predicted_span_width": zero,
+                "metric_curve_fm_finite": zero,
                 "loss_curve_raw": zero,
                 "loss_start_raw": zero,
                 "loss_end_raw": zero,
@@ -704,10 +728,53 @@ class Pi0(_model.BaseModel):
             width_weight=self.origami_vla_config.width_loss_weight,
             span_representation=self.origami_vla_config.spline_span_representation,
         )
-        if self.origami_vla_config.backprop_auxiliary_losses:
-            total_loss = base_loss + aux_loss[:, None]
+        if self.origami_vla_config.curve_fm_enabled:
+            curve_fm_loss, curve_fm_terms = _origami_spline_losses.compute_curve_flow_matching_loss(
+                x_t,
+                v_t,
+                u_t,
+                action_mask,
+                stats=self.origami_action_stats,
+                use_quantiles=self.origami_vla_config.use_quantile_norm,
+                degree=self.origami_vla_config.degree,
+                max_control_points=self.origami_vla_config.max_control_points,
+                max_span_count=self.origami_vla_config.max_span_count,
+                sample_intervals=self.origami_vla_config.curve_fm_sample_intervals,
+                include_endpoints=self.origami_vla_config.curve_fm_include_endpoints,
+                width_min=self.origami_vla_config.curve_fm_width_min,
+                denominator_eps=self.origami_vla_config.curve_fm_denominator_eps,
+                softmax_clip=self.origami_vla_config.curve_fm_softmax_clip,
+                loss_clip=self.origami_vla_config.curve_fm_loss_clip,
+                span_representation=self.origami_vla_config.spline_span_representation,
+                separate_velocity_metrics=self.origami_vla_config.curve_fm_separate_velocity_metrics,
+            )
         else:
-            total_loss = base_loss + jax.lax.stop_gradient(aux_loss)[:, None]
+            curve_fm_loss = jnp.zeros((base_loss.shape[0],), dtype=jnp.float32)
+            curve_fm_terms = {
+                key: curve_fm_loss
+                for key in (
+                    "curve_fm_velocity_mae",
+                    "curve_fm_velocity_rms",
+                    "curve_fm_jvp_error_norm",
+                    "curve_fm_jvp_norm_pred",
+                    "curve_fm_jvp_norm_target",
+                    "curve_fm_max_abs_velocity_pred",
+                    "curve_fm_max_abs_velocity_target",
+                    "curve_fm_min_predicted_span_width",
+                    "curve_fm_finite",
+                )
+            }
+
+        if self.origami_vla_config.backprop_auxiliary_losses:
+            clean_aux_for_total = aux_loss
+        else:
+            clean_aux_for_total = jax.lax.stop_gradient(aux_loss)
+        weighted_curve_fm_loss = self.origami_vla_config.curve_fm_loss_weight * curve_fm_loss
+        if self.origami_vla_config.curve_fm_backprop:
+            curve_fm_for_total = weighted_curve_fm_loss
+        else:
+            curve_fm_for_total = jax.lax.stop_gradient(weighted_curve_fm_loss)
+        total_loss = base_loss + clean_aux_for_total[:, None] + curve_fm_for_total[:, None]
 
         curve_raw = reduce_metric(aux_terms["curve"])
         start_raw = reduce_metric(aux_terms["start"])
@@ -718,6 +785,17 @@ class Pi0(_model.BaseModel):
         end_mae_rad = reduce_metric(aux_terms["end_mae_rad"])
         width_mae = reduce_metric(aux_terms["width_mae"])
         aux_total = reduce_metric(aux_loss)
+        curve_fm_raw = reduce_metric(curve_fm_loss)
+        curve_fm_weighted = self.origami_vla_config.curve_fm_loss_weight * curve_fm_raw
+        curve_fm_velocity_mae = reduce_metric(curve_fm_terms["curve_fm_velocity_mae"])
+        curve_fm_velocity_rms = reduce_metric(curve_fm_terms["curve_fm_velocity_rms"])
+        curve_fm_jvp_error_norm = reduce_metric(curve_fm_terms["curve_fm_jvp_error_norm"])
+        curve_fm_jvp_norm_pred = reduce_metric(curve_fm_terms["curve_fm_jvp_norm_pred"])
+        curve_fm_jvp_norm_target = reduce_metric(curve_fm_terms["curve_fm_jvp_norm_target"])
+        curve_fm_max_abs_velocity_pred = reduce_metric(curve_fm_terms["curve_fm_max_abs_velocity_pred"])
+        curve_fm_max_abs_velocity_target = reduce_metric(curve_fm_terms["curve_fm_max_abs_velocity_target"])
+        curve_fm_min_predicted_span_width = reduce_metric(curve_fm_terms["curve_fm_min_predicted_span_width"])
+        curve_fm_finite = jnp.mean(curve_fm_terms["curve_fm_finite"])
         total_mean = reduce_metric(total_loss)
 
         return total_loss, {
@@ -725,6 +803,17 @@ class Pi0(_model.BaseModel):
             "loss_total": total_mean,
             "loss_base_flow": base_loss_mean,
             "loss_aux_total": aux_total,
+            "loss_curve_fm_raw": curve_fm_raw,
+            "loss_curve_fm_weighted": curve_fm_weighted,
+            "metric_curve_fm_velocity_mae": curve_fm_velocity_mae,
+            "metric_curve_fm_velocity_rms": curve_fm_velocity_rms,
+            "metric_curve_fm_jvp_error_norm": curve_fm_jvp_error_norm,
+            "metric_curve_fm_jvp_norm_pred": curve_fm_jvp_norm_pred,
+            "metric_curve_fm_jvp_norm_target": curve_fm_jvp_norm_target,
+            "metric_curve_fm_max_abs_velocity_pred": curve_fm_max_abs_velocity_pred,
+            "metric_curve_fm_max_abs_velocity_target": curve_fm_max_abs_velocity_target,
+            "metric_curve_fm_min_predicted_span_width": curve_fm_min_predicted_span_width,
+            "metric_curve_fm_finite": curve_fm_finite,
             "loss_curve_raw": curve_raw,
             "loss_start_raw": start_raw,
             "loss_end_raw": end_raw,
