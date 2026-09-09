@@ -733,3 +733,9 @@ python .\Datasets\OnlineRL\2_create_monte_carlo_all_rewarded_episodes.py `
 
 
 
+uvx hf upload huggingaccounttest/RO-comp-action-spline-aux_plus_curve_fm-4000 \
+  /home/ubuntu/RO-openpi/checkpoints/pi05_origami_comp_action_spline/origami_run_1gpu_1epoch_comp_action_spline/4000 \
+  . \
+  --repo-type model
+
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.98 uv run scripts/train.py   pi05_origami_comp_action_spline   --exp-name=origami_run_1gpu_1epoch_comp_action_spline   --overwrite   --fsdp-devices 1

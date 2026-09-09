@@ -2649,9 +2649,9 @@ _CONFIGS = [
         data=OrigamiCompActionChunkDataConfig(
             repo_id="local/origami_comp_action_chunk",
             assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk"),
-            dataset_root="E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset",
+            dataset_root="/data/RO-competition-paper-dataset",
             manifest_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/data/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             prompt="fold paper into airplane",
@@ -2660,7 +2660,7 @@ _CONFIGS = [
             tactile_filename="tactile_60d.npy",
             dataset_backend="video",
             shard_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/data/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             shard_manifest_name="shard_manifest.json",
@@ -2702,7 +2702,7 @@ _CONFIGS = [
                 frame_stride=1,
                 keep_horizon_clipped=False,
                 planner_export_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/data/RO-competition-paper-dataset/"
                     "metadata/checkpoint_planner_vla_rollout_exports/"
                     "no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
                 ),
@@ -2743,7 +2743,7 @@ _CONFIGS = [
             ),
             shard_build=OrigamiCompActionChunkShardBuildConfig(
                 shard_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/data/RO-competition-paper-dataset/"
                     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
                 ),
                 split="train",
@@ -2764,7 +2764,7 @@ _CONFIGS = [
                 metadata_name="metadata.json",
                 complete_marker_name="complete.marker",
                 max_shards_per_run=None,
-                progress_update_frames=256,
+                progress_update_frames=64,
                 progress_max_active_bars=8,
                 progress_poll_seconds=0.25,
                 progress_leave_active_bars=False,
@@ -2785,7 +2785,7 @@ _CONFIGS = [
                 ),
                 weight_loaders.NpzSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "/data/RO-competition-paper-dataset/"
                         "metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/"
                         "openpi_origami_planner_adapter_prefixed_params.npz"
                     ),
@@ -2793,7 +2793,7 @@ _CONFIGS = [
                 ),
                 weight_loaders.OrbaxSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "/data/RO-competition-paper-dataset/"
                         "metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
                     ),
                     key_prefix="origami_ftp_tactile_prefix_encoder",
@@ -2802,10 +2802,10 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=2_000,
-            peak_lr=2e-4,
-            decay_steps=60_000,
-            decay_lr=2e-6,
+            warmup_steps=850,
+            peak_lr=8e-5,
+            decay_steps=17_000,
+            decay_lr=1e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
@@ -2815,18 +2815,19 @@ _CONFIGS = [
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder.*", multiplier=1.5),
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
         ),
-        batch_size=32,
-        num_workers=8,
-        num_train_steps=60_000,
-        log_interval=100,
+        batch_size=160,
+        num_workers=4,
+        num_train_steps=17_000,
+        log_interval=50,
         run_val=False,
         val_repo_id=None,
         val_frequency=2_000,
         val_batch_size=32,
         checkpoint_strategy="manual",
-        save_interval=5_000,
-        keep_period=10_000,
-        max_to_keep=3,
+        save_steps=(1000, 4_000, 8500, 12_000, 15_000),
+        # save_interval=5_000,
+        # keep_period=10_000,
+        max_to_keep=7,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
@@ -2886,11 +2887,11 @@ _ORIGAMI_COMP_ACTION_CHUNK_CONFIG = next(
     config for config in _CONFIGS if config.name == "pi05_origami_comp_action_chunk"
 )
 _ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/data/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_spline/no_hmm_224_headleft_tactile_prompt_planner"
 )
 _ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/data/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_spline_shards/no_hmm_224_headleft_tactile_prompt_planner"
 )
 _CONFIGS.append(
@@ -2908,15 +2909,15 @@ _CONFIGS.append(
                 degree=3,
                 spline_span_representation="logits",
                 compute_auxiliary_metrics=True,
-                backprop_auxiliary_losses=True,
-                curve_loss_weight=0.05,
-                start_loss_weight=0.01,
-                end_loss_weight=0.01,
-                width_loss_weight=0.01,
+                backprop_auxiliary_losses=False, #True
+                curve_loss_weight=6,
+                start_loss_weight=1,
+                end_loss_weight=3,
+                width_loss_weight=2,
                 curve_fm_enabled=True,
-                curve_fm_backprop=False,
-                curve_fm_loss_weight=0.0,
-                curve_fm_sample_intervals=10,
+                curve_fm_backprop=False,#True
+                curve_fm_loss_weight=10.0,
+                curve_fm_sample_intervals=120,
                 curve_fm_include_endpoints=True,
                 curve_fm_width_min=1e-4,
                 curve_fm_denominator_eps=1e-6,
@@ -2941,11 +2942,22 @@ _CONFIGS.append(
             action_filename="",
             action_chunk_stride=1,
             drop_horizon_clipped=True,
-            tactile_image_input_dropout_prob=0.0,
+            tactile_image_input_dropout_prob=0.05,
+            tactile_raw_input_dropout_prob=0.5,
+            tactile_raw_dropout_seed=1234,
             tactile_image_dropout_seed=4321,
             shard_build=dataclasses.replace(
                 _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.shard_build,
                 shard_root=_ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT,
+            ),
+            manifest_build=dataclasses.replace(
+                _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.manifest_build,
+                planner_view_mode_probs={
+                    "frame_stride_10": 0.3,
+                    "random_mix": 0.3,
+                    "fixed_7": 0.15,
+                    "fixed_15": 0.25,
+                },
             ),
             data_transforms=NoOpTransformFactory(),
         ),
