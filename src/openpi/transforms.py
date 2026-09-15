@@ -351,6 +351,153 @@ class OrigamiSplineUnnormalize(DataTransformFn):
         return unnormalized
 
 
+@dataclasses.dataclass(frozen=True)
+class OrigamiBsplinePointsNormalize(DataTransformFn):
+    """Normalize packed B-spline point actions with separate point and width-logit stats."""
+
+    state_stats: NormStats | None
+    tactile_prompt_stats: NormStats | None
+    point_stats: NormStats | None
+    width_logit_stats: NormStats | None
+    point_count: int
+    width_logit_count: int
+    use_quantiles: bool = False
+    strict: bool = False
+
+    def __post_init__(self):
+        if self.use_quantiles:
+            for name, stats in (
+                ("state", self.state_stats),
+                ("tactile_prompt", self.tactile_prompt_stats),
+                ("actions_bspline_points", self.point_stats),
+                ("actions_bspline_width_logits", self.width_logit_stats),
+            ):
+                if stats is None:
+                    continue
+                if stats.q01 is None or stats.q99 is None:
+                    raise ValueError(f"Quantile stats required for {name} when use_quantiles=True.")
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "state" in data:
+            if self.state_stats is None:
+                if self.strict:
+                    raise ValueError("OrigamiBsplinePointsNormalize expected state stats but none were provided.")
+            else:
+                data["state"] = self._apply(np.asarray(data["state"]), self.state_stats)
+        elif self.strict and self.state_stats is not None:
+            raise ValueError("OrigamiBsplinePointsNormalize expected a 'state' key in the data.")
+
+        if "tactile_prompt" in data:
+            if self.tactile_prompt_stats is None:
+                if self.strict:
+                    raise ValueError(
+                        "OrigamiBsplinePointsNormalize expected tactile_prompt stats but none were provided."
+                    )
+            else:
+                data["tactile_prompt"] = self._apply(np.asarray(data["tactile_prompt"]), self.tactile_prompt_stats)
+        elif self.strict and self.tactile_prompt_stats is not None:
+            raise ValueError("OrigamiBsplinePointsNormalize expected a 'tactile_prompt' key in the data.")
+
+        if "actions" in data:
+            if self.point_stats is None or self.width_logit_stats is None:
+                if self.strict:
+                    raise ValueError(
+                        "OrigamiBsplinePointsNormalize expected both point and width-logit stats for packed actions."
+                    )
+                return data
+            data["actions"] = self._normalize_actions(np.asarray(data["actions"]))
+        elif self.strict and (self.point_stats is not None or self.width_logit_stats is not None):
+            raise ValueError("OrigamiBsplinePointsNormalize expected an 'actions' key in the data.")
+        return data
+
+    def _apply(self, x: np.ndarray, stats: NormStats) -> np.ndarray:
+        if self.use_quantiles:
+            assert stats.q01 is not None
+            assert stats.q99 is not None
+            q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+            return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+        mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
+        return (x - mean) / (std + 1e-6)
+
+    def _normalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        normalized = np.array(actions, copy=True)
+        if normalized.shape[-2] <= self.point_count:
+            raise ValueError(
+                f"Packed B-spline point actions must have at least {self.point_count + 1} rows, "
+                f"got shape {normalized.shape}."
+            )
+        normalized[..., : self.point_count, :] = self._apply(
+            normalized[..., : self.point_count, :],
+            self.point_stats,
+        )
+        normalized[..., self.point_count, : self.width_logit_count] = self._apply(
+            normalized[..., self.point_count, : self.width_logit_count],
+            self.width_logit_stats,
+        )
+        return normalized
+
+
+@dataclasses.dataclass(frozen=True)
+class OrigamiBsplinePointsUnnormalize(DataTransformFn):
+    """Inverse of OrigamiBsplinePointsNormalize."""
+
+    state_stats: NormStats | None
+    tactile_prompt_stats: NormStats | None
+    point_stats: NormStats | None
+    width_logit_stats: NormStats | None
+    point_count: int
+    width_logit_count: int
+    use_quantiles: bool = False
+
+    def __post_init__(self):
+        if self.use_quantiles:
+            for name, stats in (
+                ("state", self.state_stats),
+                ("tactile_prompt", self.tactile_prompt_stats),
+                ("actions_bspline_points", self.point_stats),
+                ("actions_bspline_width_logits", self.width_logit_stats),
+            ):
+                if stats is None:
+                    continue
+                if stats.q01 is None or stats.q99 is None:
+                    raise ValueError(f"Quantile stats required for {name} when use_quantiles=True.")
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "state" in data and self.state_stats is not None:
+            data["state"] = self._apply(np.asarray(data["state"]), self.state_stats)
+        if "tactile_prompt" in data and self.tactile_prompt_stats is not None:
+            data["tactile_prompt"] = self._apply(np.asarray(data["tactile_prompt"]), self.tactile_prompt_stats)
+        if "actions" in data and self.point_stats is not None and self.width_logit_stats is not None:
+            data["actions"] = self._unnormalize_actions(np.asarray(data["actions"]))
+        return data
+
+    def _apply(self, x: np.ndarray, stats: NormStats) -> np.ndarray:
+        if self.use_quantiles:
+            assert stats.q01 is not None
+            assert stats.q99 is not None
+            q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+            return (x + 1.0) / 2.0 * (q99 - q01 + 1e-6) + q01
+        mean, std = stats.mean[..., : x.shape[-1]], stats.std[..., : x.shape[-1]]
+        return x * (std + 1e-6) + mean
+
+    def _unnormalize_actions(self, actions: np.ndarray) -> np.ndarray:
+        unnormalized = np.array(actions, copy=True)
+        if unnormalized.shape[-2] <= self.point_count:
+            raise ValueError(
+                f"Packed B-spline point actions must have at least {self.point_count + 1} rows, "
+                f"got shape {unnormalized.shape}."
+            )
+        unnormalized[..., : self.point_count, :] = self._apply(
+            unnormalized[..., : self.point_count, :],
+            self.point_stats,
+        )
+        unnormalized[..., self.point_count, : self.width_logit_count] = self._apply(
+            unnormalized[..., self.point_count, : self.width_logit_count],
+            self.width_logit_stats,
+        )
+        return unnormalized
+
+
 def make_normalize_transform(
     norm_stats: at.PyTree[NormStats] | None,
     *,
@@ -378,6 +525,22 @@ def make_normalize_transform(
             max_control_points=origami_max_control_points,
             max_span_count=origami_max_span_count,
             span_representation=origami_spline_span_representation,
+            use_quantiles=use_quantiles,
+            strict=strict,
+        )
+    if origami_action_mode == "bspline_points" and (
+        origami_max_control_points is not None or origami_max_span_count is not None
+    ):
+        if origami_max_control_points is None or origami_max_span_count is None:
+            raise ValueError("Both origami_max_control_points and origami_max_span_count must be provided together.")
+        stats_dict = norm_stats or {}
+        return OrigamiBsplinePointsNormalize(
+            state_stats=stats_dict.get("state"),
+            tactile_prompt_stats=stats_dict.get("tactile_prompt"),
+            point_stats=stats_dict.get("actions_bspline_points"),
+            width_logit_stats=stats_dict.get("actions_bspline_width_logits"),
+            point_count=origami_max_control_points,
+            width_logit_count=origami_max_span_count,
             use_quantiles=use_quantiles,
             strict=strict,
         )
@@ -410,6 +573,21 @@ def make_unnormalize_transform(
             max_control_points=origami_max_control_points,
             max_span_count=origami_max_span_count,
             span_representation=origami_spline_span_representation,
+            use_quantiles=use_quantiles,
+        )
+    if origami_action_mode == "bspline_points" and (
+        origami_max_control_points is not None or origami_max_span_count is not None
+    ):
+        if origami_max_control_points is None or origami_max_span_count is None:
+            raise ValueError("Both origami_max_control_points and origami_max_span_count must be provided together.")
+        stats_dict = norm_stats or {}
+        return OrigamiBsplinePointsUnnormalize(
+            state_stats=stats_dict.get("state"),
+            tactile_prompt_stats=stats_dict.get("tactile_prompt"),
+            point_stats=stats_dict.get("actions_bspline_points"),
+            width_logit_stats=stats_dict.get("actions_bspline_width_logits"),
+            point_count=origami_max_control_points,
+            width_logit_count=origami_max_span_count,
             use_quantiles=use_quantiles,
         )
     return Unnormalize(norm_stats, use_quantiles=use_quantiles)

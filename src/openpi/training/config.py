@@ -288,7 +288,7 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     prompt: str = "fold paper into airplane"
     local_target_npz_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state.npz"
     local_target_index_name: str = "local_delta_reached_state_targets_K15_include_current_restrict_true_state_index.parquet"
-    action_source: Literal["spline", "action_chunk"] = "spline"
+    action_source: Literal["spline", "action_chunk", "bspline_points"] = "spline"
     action_filename: str = "action_65d.npy"
     action_chunk_stride: int = 1
     drop_horizon_clipped: bool = False
@@ -513,7 +513,7 @@ class OrigamiCompActionChunkShardBuildConfig:
 
 @dataclasses.dataclass(frozen=True)
 class OrigamiCompActionChunkDataConfig(OrigamiVlaDataConfig):
-    action_source: Literal["spline", "action_chunk"] = "action_chunk"
+    action_source: Literal["spline", "action_chunk", "bspline_points"] = "action_chunk"
     local_target_npz_name: str = ""
     action_filename: str = "action_65d.npy"
     action_chunk_stride: int = 1
@@ -2947,6 +2947,58 @@ _CONFIGS.append(
                 _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.shard_build,
                 shard_root=_ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT,
             ),
+            data_transforms=NoOpTransformFactory(),
+        ),
+    )
+)
+
+_CONFIGS.append(
+    dataclasses.replace(
+        _ORIGAMI_COMP_ACTION_CHUNK_CONFIG,
+        name="pi05_origami_comp_action_bspline_points",
+        model=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model,
+            action_horizon=18,
+            origami_vla=dataclasses.replace(
+                _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model.origami_vla,
+                action_mode="bspline_points",
+                max_control_points=17,
+                max_span_count=10,
+                degree=3,
+                bspline_control_point_count=13,
+                bspline_point_count=17,
+                bspline_width_logit_count=10,
+                bspline_curve_sample_intervals=120,
+                bspline_softmax_clip=30.0,
+                bspline_denominator_eps=1.0e-6,
+                bspline_aux_metrics_enabled=True,
+                compute_auxiliary_metrics=True,
+                backprop_auxiliary_losses=False,
+                curve_loss_weight=1.0,
+                start_loss_weight=1.0,
+                end_loss_weight=1.0,
+                width_loss_weight=1.0,
+                curve_fm_enabled=False,
+                curve_fm_backprop=False,
+                curve_fm_loss_weight=0.0,
+                mask_action_noise=True,
+                action_norm_stats_dir=None,
+                disable_auxiliary_losses=False,
+            ),
+        ),
+        data=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data,
+            repo_id="local/origami_comp_action_bspline_points",
+            assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_bspline_points"),
+            manifest_root=_ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT,
+            dataset_backend="video",
+            shard_root=None,
+            action_source="bspline_points",
+            local_target_npz_name="local_delta_action_bspline_points_knotspans10.npz",
+            local_target_index_name="local_delta_action_bspline_points_knotspans10_index.parquet",
+            action_filename="",
+            action_chunk_stride=1,
+            drop_horizon_clipped=True,
             data_transforms=NoOpTransformFactory(),
         ),
     )

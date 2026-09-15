@@ -27,7 +27,7 @@ class OrigamiVlaSettings:
     planner_progress_dim: int = 2
     planner_uncertainty_dim: int = 3
     planner_history_dim: int = 512
-    action_source: Literal["spline", "action_chunk"] = "spline"
+    action_source: Literal["spline", "action_chunk", "bspline_points"] = "spline"
     action_filename: str = "action_65d.npy"
     action_chunk_stride: int = 1
     drop_horizon_clipped: bool = False
@@ -280,6 +280,37 @@ def pack_spline_actions(
     return actions, action_mask
 
 
+def pack_bspline_point_actions(
+    points: np.ndarray,
+    width_logits: np.ndarray,
+    *,
+    point_count: int,
+    width_logit_count: int,
+    action_horizon: int,
+    action_dim: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    points = np.asarray(points, dtype=np.float32)
+    width_logits = np.asarray(width_logits, dtype=np.float32).reshape(-1)
+    if points.ndim != 2:
+        raise ValueError(f"Expected B-spline point targets to be 2D, got shape {points.shape}")
+    if points.shape != (point_count, action_dim):
+        raise ValueError(f"Expected B-spline point targets shape {(point_count, action_dim)}, got {points.shape}")
+    if width_logits.shape[0] != width_logit_count:
+        raise ValueError(f"Expected {width_logit_count} B-spline width logits, got {width_logits.shape[0]}")
+    if action_horizon != point_count + 1:
+        raise ValueError(f"B-spline point action_horizon must equal point_count + 1, got {action_horizon}")
+    if action_dim < width_logit_count:
+        raise ValueError(f"Action dim {action_dim} is too small for {width_logit_count} width logits.")
+
+    actions = np.zeros((action_horizon, action_dim), dtype=np.float32)
+    action_mask = np.zeros((action_horizon, action_dim), dtype=bool)
+    actions[:point_count, :] = points
+    action_mask[:point_count, :] = True
+    actions[point_count, :width_logit_count] = width_logits
+    action_mask[point_count, :width_logit_count] = True
+    return actions, action_mask
+
+
 def extract_target_sample(
     target_archive: Any,
     sample_index: int,
@@ -296,6 +327,15 @@ def extract_target_sample(
     if knot_end <= knot_start:
         raise ValueError(f"Empty knot slice for sample_index={sample_index}")
     return control_points[cp_start:cp_end], local_knots[knot_start:knot_end]
+
+
+def extract_bspline_point_sample(
+    target_archive: Any,
+    sample_index: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    points = np.asarray(target_archive["points"][sample_index], dtype=np.float32)
+    width_logits = np.asarray(target_archive["width_logits"][sample_index], dtype=np.float32)
+    return points, width_logits
 
 
 def extract_action_chunk(
@@ -421,7 +461,7 @@ class OrigamiVlaDataset:
             timestamps=np.load(arrays_root / "timestamps.npy", mmap_mode="r"),
             target_archive=(
                 np.load(arrays_root / self._settings.local_target_npz_name, allow_pickle=False)
-                if self._settings.action_source == "spline"
+                if self._settings.action_source in {"spline", "bspline_points"}
                 else None
             ),
             planner_archives={},
@@ -607,6 +647,21 @@ class OrigamiVlaDataset:
                 span_widths,
                 max_control_points=self._settings.max_control_points,
                 max_span_count=self._settings.max_span_count,
+                action_dim=self._settings.action_dim,
+            )
+        elif self._settings.action_source == "bspline_points":
+            if bundle.target_archive is None:
+                raise RuntimeError(
+                    f"B-spline point action source requested, but target archive is missing for {episode_uid}."
+                )
+            target_sample_index = int(row["local_target_npz_sample_index"])
+            points, width_logits = extract_bspline_point_sample(bundle.target_archive, target_sample_index)
+            actions, action_mask = pack_bspline_point_actions(
+                points,
+                width_logits,
+                point_count=self._settings.max_control_points,
+                width_logit_count=self._settings.max_span_count,
+                action_horizon=self._settings.action_horizon,
                 action_dim=self._settings.action_dim,
             )
         elif self._settings.action_source == "action_chunk":

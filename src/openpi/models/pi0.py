@@ -12,6 +12,7 @@ from typing_extensions import override
 from openpi.models import model as _model
 from openpi.models import pi0_config
 import openpi.models.origami_planner_adapter as _origami_planner_adapter
+import openpi.models.origami_bspline_point_losses as _origami_bspline_point_losses
 import openpi.models.origami_ftp_tactile_prefix_encoder as _origami_ftp_tactile_prefix_encoder
 import openpi.models.origami_spline_losses as _origami_spline_losses
 import openpi.models.origami_tactile_adapter as _origami_tactile_adapter
@@ -157,6 +158,46 @@ def _load_origami_action_stats(
     )
 
 
+def _load_origami_bspline_point_action_stats(
+    stats_dir: str | None,
+) -> _origami_bspline_point_losses.PackedBsplinePointNormStats | None:
+    if not stats_dir:
+        return None
+    try:
+        loaded = _normalize.load(_download.maybe_download(stats_dir))
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Origami B-spline point normalization stats were not found under {stats_dir}. "
+            "Run scripts/compute_origami_comp_action_bspline_point_norm_stats.py before training."
+        ) from exc
+    required_keys = ("actions_bspline_points", "actions_bspline_width_logits")
+    missing = [key for key in required_keys if key not in loaded]
+    if missing:
+        raise KeyError(
+            f"Missing Origami B-spline point normalization stats {missing} under {stats_dir}. "
+            "Run scripts/compute_origami_comp_action_bspline_point_norm_stats.py first."
+        )
+
+    def _convert(stats: _normalize.NormStats) -> _origami_spline_losses.ActionNormStats:
+        def _freeze(values: np.ndarray | None) -> tuple[float, ...] | None:
+            if values is None:
+                return None
+            return tuple(np.asarray(values, dtype=np.float32).reshape(-1).tolist())
+
+        return _origami_spline_losses.ActionNormStats(
+            mean=_freeze(stats.mean),
+            std=_freeze(stats.std),
+            q01=_freeze(stats.q01),
+            q99=_freeze(stats.q99),
+        )
+
+    logger.info("Loaded Origami B-spline point action normalization stats from %s", stats_dir)
+    return _origami_bspline_point_losses.PackedBsplinePointNormStats(
+        points=_convert(loaded["actions_bspline_points"]),
+        width_logits=_convert(loaded["actions_bspline_width_logits"]),
+    )
+
+
 def _load_origami_tactile_stats(
     stats_dir: str | None,
 ) -> _origami_tactile_adapter.OrigamiTactileNormStats | None:
@@ -188,6 +229,15 @@ class Pi0(_model.BaseModel):
             if config.origami_vla.enabled
             and config.origami_vla.action_mode == "spline"
             and (not config.origami_vla.disable_auxiliary_losses or config.origami_vla.curve_fm_enabled)
+            else None
+        )
+        self.origami_bspline_point_action_stats = (
+            _load_origami_bspline_point_action_stats(config.origami_vla.action_norm_stats_dir)
+            if config.origami_vla.enabled
+            and config.origami_vla.action_mode == "bspline_points"
+            and config.origami_vla.compute_auxiliary_metrics
+            and config.origami_vla.bspline_aux_metrics_enabled
+            and not config.origami_vla.disable_auxiliary_losses
             else None
         )
         self.origami_tactile_stats = (
@@ -611,7 +661,7 @@ class Pi0(_model.BaseModel):
         flow_action_mask = None
         if (
             self.origami_vla_config.enabled
-            and self.origami_vla_config.action_mode == "spline"
+            and self.origami_vla_config.action_mode in {"spline", "bspline_points"}
             and self.origami_vla_config.mask_action_noise
             and observation.action_mask is not None
         ):
@@ -672,6 +722,106 @@ class Pi0(_model.BaseModel):
                 "loss": base_loss_mean,
                 "loss_total": base_loss_mean,
                 "loss_base_flow": base_loss_mean,
+            }
+        if self.origami_vla_config.action_mode == "bspline_points":
+            zero = jnp.asarray(0.0, dtype=base_loss.dtype)
+            if (
+                self.origami_vla_config.disable_auxiliary_losses
+                or not self.origami_vla_config.compute_auxiliary_metrics
+                or not self.origami_vla_config.bspline_aux_metrics_enabled
+            ):
+                return base_loss, {
+                    "loss": base_loss_mean,
+                    "loss_total": base_loss_mean,
+                    "loss_base_flow": base_loss_mean,
+                    "loss_aux_total": zero,
+                    "loss_curve_fm_raw": zero,
+                    "loss_curve_fm_weighted": zero,
+                    "metric_curve_fm_velocity_mae": zero,
+                    "metric_curve_fm_velocity_rms": zero,
+                    "metric_curve_fm_jvp_error_norm": zero,
+                    "metric_curve_fm_jvp_norm_pred": zero,
+                    "metric_curve_fm_jvp_norm_target": zero,
+                    "metric_curve_fm_max_abs_velocity_pred": zero,
+                    "metric_curve_fm_max_abs_velocity_target": zero,
+                    "metric_curve_fm_min_predicted_span_width": zero,
+                    "metric_curve_fm_finite": zero,
+                    "loss_curve_raw": zero,
+                    "loss_start_raw": zero,
+                    "loss_end_raw": zero,
+                    "loss_width_raw": zero,
+                    "metric_curve_mae_rad": zero,
+                    "metric_start_mae_rad": zero,
+                    "metric_end_mae_rad": zero,
+                    "metric_width_mae": zero,
+                    "loss_curve_weighted": zero,
+                    "loss_start_weighted": zero,
+                    "loss_end_weighted": zero,
+                    "loss_width_weighted": zero,
+                    "metric_bspline_condition_number": zero,
+                    "metric_bspline_sigma_min": zero,
+                    "metric_bspline_pred_sigma_min": zero,
+                    "metric_bspline_finite": zero,
+                }
+
+            pred_actions_for_aux = x_t - time_expanded * v_t
+            aux_terms = _origami_bspline_point_losses.compute_auxiliary_metrics(
+                pred_actions_for_aux,
+                actions,
+                action_mask,
+                stats=self.origami_bspline_point_action_stats,
+                use_quantiles=self.origami_vla_config.use_quantile_norm,
+                degree=self.origami_vla_config.degree,
+                point_count=self.origami_vla_config.bspline_point_count,
+                control_point_count=self.origami_vla_config.bspline_control_point_count,
+                width_logit_count=self.origami_vla_config.bspline_width_logit_count,
+                sample_intervals=self.origami_vla_config.bspline_curve_sample_intervals,
+                smooth_l1_beta=self.origami_vla_config.smooth_l1_beta,
+                width_min=self.origami_vla_config.width_min,
+                denominator_eps=self.origami_vla_config.bspline_denominator_eps,
+                softmax_clip=self.origami_vla_config.bspline_softmax_clip,
+            )
+            curve_raw = reduce_metric(aux_terms["curve"])
+            start_raw = reduce_metric(aux_terms["start"])
+            end_raw = reduce_metric(aux_terms["end"])
+            width_raw = reduce_metric(aux_terms["width"])
+            curve_weighted = self.origami_vla_config.curve_loss_weight * curve_raw
+            start_weighted = self.origami_vla_config.start_loss_weight * start_raw
+            end_weighted = self.origami_vla_config.end_loss_weight * end_raw
+            width_weighted = self.origami_vla_config.width_loss_weight * width_raw
+            aux_total = curve_weighted + start_weighted + end_weighted + width_weighted
+            return base_loss, {
+                "loss": base_loss_mean,
+                "loss_total": base_loss_mean,
+                "loss_base_flow": base_loss_mean,
+                "loss_aux_total": aux_total,
+                "loss_curve_fm_raw": zero,
+                "loss_curve_fm_weighted": zero,
+                "metric_curve_fm_velocity_mae": zero,
+                "metric_curve_fm_velocity_rms": zero,
+                "metric_curve_fm_jvp_error_norm": zero,
+                "metric_curve_fm_jvp_norm_pred": zero,
+                "metric_curve_fm_jvp_norm_target": zero,
+                "metric_curve_fm_max_abs_velocity_pred": zero,
+                "metric_curve_fm_max_abs_velocity_target": zero,
+                "metric_curve_fm_min_predicted_span_width": zero,
+                "metric_curve_fm_finite": zero,
+                "loss_curve_raw": curve_raw,
+                "loss_start_raw": start_raw,
+                "loss_end_raw": end_raw,
+                "loss_width_raw": width_raw,
+                "metric_curve_mae_rad": reduce_metric(aux_terms["curve_mae_rad"]),
+                "metric_start_mae_rad": reduce_metric(aux_terms["start_mae_rad"]),
+                "metric_end_mae_rad": reduce_metric(aux_terms["end_mae_rad"]),
+                "metric_width_mae": reduce_metric(aux_terms["width_mae"]),
+                "loss_curve_weighted": curve_weighted,
+                "loss_start_weighted": start_weighted,
+                "loss_end_weighted": end_weighted,
+                "loss_width_weighted": width_weighted,
+                "metric_bspline_condition_number": reduce_metric(aux_terms["condition_number"]),
+                "metric_bspline_sigma_min": reduce_metric(aux_terms["sigma_min"]),
+                "metric_bspline_pred_sigma_min": reduce_metric(aux_terms["pred_sigma_min"]),
+                "metric_bspline_finite": jnp.mean(aux_terms["finite"]),
             }
         if (
             self.origami_vla_config.disable_auxiliary_losses

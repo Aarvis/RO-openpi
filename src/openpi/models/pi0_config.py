@@ -91,7 +91,7 @@ class RobotSplineConfig:
 @dataclasses.dataclass(frozen=True)
 class OrigamiVlaConfig:
     enabled: bool = False
-    action_mode: Literal["spline", "action_chunk"] = "spline"
+    action_mode: Literal["spline", "action_chunk", "bspline_points"] = "spline"
     # User-facing switch: when enabled, the VLA loss uses per-sample speed-efficiency
     # weights so faster semantic checkpoint executions contribute more strongly.
     episode_execution_speed_preference: bool = False
@@ -106,6 +106,13 @@ class OrigamiVlaConfig:
     max_control_points: int = 18
     max_span_count: int = 15
     spline_span_representation: Literal["physical_widths", "logits"] = "physical_widths"
+    bspline_control_point_count: int = 13
+    bspline_point_count: int = 17
+    bspline_width_logit_count: int = 10
+    bspline_curve_sample_intervals: int = 120
+    bspline_softmax_clip: float | None = 30.0
+    bspline_denominator_eps: float = 1.0e-6
+    bspline_aux_metrics_enabled: bool = True
     curve_sample_count: int = 120
     smooth_l1_beta: float = 0.05
     curve_loss_weight: float = 0.5
@@ -183,7 +190,7 @@ class OrigamiVlaConfig:
     speed_efficiency_weight_eps: float = 1.0e-6
 
     def __post_init__(self) -> None:
-        if self.action_mode not in ("spline", "action_chunk"):
+        if self.action_mode not in ("spline", "action_chunk", "bspline_points"):
             raise ValueError(f"Unsupported Origami action_mode: {self.action_mode!r}")
         if self.spline_span_representation not in ("physical_widths", "logits"):
             raise ValueError(
@@ -192,6 +199,19 @@ class OrigamiVlaConfig:
             )
         if self.action_mode != "spline" and self.spline_span_representation != "physical_widths":
             raise ValueError("spline_span_representation='logits' is only valid for action_mode='spline'.")
+        if self.action_mode == "bspline_points":
+            if self.bspline_control_point_count <= 0:
+                raise ValueError("bspline_control_point_count must be positive.")
+            if self.bspline_point_count <= 0:
+                raise ValueError("bspline_point_count must be positive.")
+            if self.bspline_width_logit_count <= 0:
+                raise ValueError("bspline_width_logit_count must be positive.")
+            if self.bspline_curve_sample_intervals <= 0:
+                raise ValueError("bspline_curve_sample_intervals must be positive.")
+            if self.bspline_denominator_eps <= 0.0:
+                raise ValueError("bspline_denominator_eps must be > 0.")
+            if self.bspline_softmax_clip is not None and self.bspline_softmax_clip <= 0.0:
+                raise ValueError("bspline_softmax_clip must be positive when set.")
         if self.curve_fm_backprop and not self.curve_fm_enabled:
             raise ValueError("curve_fm_backprop=True requires curve_fm_enabled=True.")
         if self.curve_fm_backprop and self.curve_fm_loss_weight <= 0.0:
@@ -307,6 +327,25 @@ class Pi0Config(_model.BaseModelConfig):
             raise ValueError(
                 f"Origami VLA action_dim ({self.action_dim}) must be >= max_span_count "
                 f"({self.origami_vla.max_span_count})."
+            )
+        if (
+            self.origami_vla.enabled
+            and self.origami_vla.action_mode == "bspline_points"
+            and self.action_horizon != self.origami_vla.bspline_point_count + 1
+        ):
+            raise ValueError(
+                "Origami B-spline point actions are packed as point tokens plus one width-logit token, "
+                f"so action_horizon must equal {self.origami_vla.bspline_point_count + 1}, "
+                f"got {self.action_horizon}."
+            )
+        if (
+            self.origami_vla.enabled
+            and self.origami_vla.action_mode == "bspline_points"
+            and self.action_dim < self.origami_vla.bspline_width_logit_count
+        ):
+            raise ValueError(
+                f"Origami B-spline point action_dim ({self.action_dim}) must be >= "
+                f"bspline_width_logit_count ({self.origami_vla.bspline_width_logit_count})."
             )
 
     @property
