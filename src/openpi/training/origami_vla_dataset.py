@@ -375,10 +375,13 @@ class _EpisodeBundle:
 class OrigamiVlaDataset:
     def __init__(self, settings: OrigamiVlaSettings, *, split: str):
         self._settings = settings
+        # Keep the split so spawned DataLoader workers can reload their own compact
+        # manifest source instead of receiving the parent process's large Python row list.
+        self._split = str(split)
         self._dataset_root = _ensure_path(settings.dataset_root)
         self._episode_cache: OrderedDict[str, _EpisodeBundle] = OrderedDict()
         self._video_cache: OrderedDict[str, cv2.VideoCapture] = OrderedDict()
-        self._rows = load_manifest_rows(settings, split).to_dict(orient="records")
+        self._rows = load_manifest_rows(settings, self._split).to_dict(orient="records")
         self._planner_output_dirs_by_episode = self._index_planner_output_dirs()
 
     def __len__(self) -> int:
@@ -386,9 +389,27 @@ class OrigamiVlaDataset:
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
+        # The video backend keeps one Python dict per manifest row. With the spawn
+        # multiprocessing context, serializing that multi-million-row list once per
+        # worker makes DataLoader startup extremely slow. Workers reconstruct these
+        # derived structures from the same immutable manifest in __setstate__.
+        state["_rows"] = None
+        state["_planner_output_dirs_by_episode"] = None
         state["_episode_cache"] = OrderedDict()
         state["_video_cache"] = OrderedDict()
         return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore a spawned video-loader worker without copying parent row data.
+
+        This deliberately rebuilds only derived, read-only manifest state. It does
+        not change the manifest, row order, random sampler, or any sample contents.
+        """
+        self.__dict__.update(state)
+        self._episode_cache = OrderedDict()
+        self._video_cache = OrderedDict()
+        self._rows = load_manifest_rows(self._settings, self._split).to_dict(orient="records")
+        self._planner_output_dirs_by_episode = self._index_planner_output_dirs()
 
     def __del__(self) -> None:
         for capture in getattr(self, "_video_cache", {}).values():
