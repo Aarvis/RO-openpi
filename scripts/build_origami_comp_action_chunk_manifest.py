@@ -108,6 +108,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Episode-level probability of disabling planner prefixes in episode_sampled mode.",
     )
     parser.add_argument(
+        "--planner-force-dropout-on-incomplete-episode",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Before episode-level assignment, force planner dropout for an episode unless every valid "
+            "action-chunk start is present in every --planner-required-complete-view-modes export."
+        ),
+    )
+    parser.add_argument(
+        "--planner-required-complete-view-modes",
+        nargs="*",
+        default=None,
+        help=(
+            "Planner exports that must each fully cover an episode before it may receive planner prefixes. "
+            "For Phase 2 use: frame_stride_25 frame_stride_30 random_mix."
+        ),
+    )
+    parser.add_argument(
         "--planner-speed-stratified-assignment",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -315,6 +333,17 @@ def _resolve_args_from_config(args: argparse.Namespace) -> argparse.Namespace:
         "--planner-dropout-episode-prob",
     )
     set_if_config(
+        "planner_force_dropout_on_incomplete_episode",
+        bool(build_config.planner_force_dropout_on_incomplete_episode),
+        "--planner-force-dropout-on-incomplete-episode",
+        "--no-planner-force-dropout-on-incomplete-episode",
+    )
+    set_if_config(
+        "planner_required_complete_view_modes",
+        list(build_config.planner_required_complete_view_modes) or None,
+        "--planner-required-complete-view-modes",
+    )
+    set_if_config(
         "planner_speed_stratified_assignment",
         bool(build_config.planner_speed_stratified_assignment),
         "--planner-speed-stratified-assignment",
@@ -458,6 +487,13 @@ class PlannerPerturbationSettings:
     previous_two_tail_fraction: float
     next_two_head_fraction: float
     seed: int
+
+
+@dataclass(frozen=True)
+class PlannerEpisodeCoverage:
+    eligible_episode_uids: frozenset[str]
+    forced_disabled_episode_uids: frozenset[str]
+    failure_reasons: dict[str, tuple[str, ...]]
 
 
 def _load_episode_table(dataset_root: Path) -> pd.DataFrame:
@@ -628,6 +664,7 @@ def _build_planner_assignments(
     speed_scores: dict[str, float] | None = None,
     speed_stratified: bool = False,
     speed_stratification_bins: int = 10,
+    forced_disabled_episode_uids: set[str] | frozenset[str] | None = None,
 ) -> dict[str, PlannerAssignment] | None:
     if not enabled or assignment_mode == "expand_view_modes":
         return None
@@ -638,21 +675,32 @@ def _build_planner_assignments(
     if speed_stratified and int(speed_stratification_bins) <= 0:
         raise ValueError("--planner-speed-stratification-bins must be positive when speed stratification is enabled.")
 
+    forced_disabled = set() if forced_disabled_episode_uids is None else set(forced_disabled_episode_uids)
+    unknown_forced = forced_disabled.difference(episode_uids)
+    if unknown_forced:
+        raise ValueError(f"Forced planner-disabled episodes are outside this split: {sorted(unknown_forced)[:5]}")
+    eligible_episode_uids = [uid for uid in episode_uids if uid not in forced_disabled]
+    if not eligible_episode_uids:
+        return {
+            uid: PlannerAssignment(enabled=False, value_variant=value_variant)
+            for uid in episode_uids
+        }
+
     if speed_stratified:
         if speed_scores is None:
             raise ValueError(
                 "Planner speed-stratified assignment requires episode speed scores; enable speed weighting "
                 "or provide a builder configuration that can compute checkpoint durations."
             )
-        missing_scores = [uid for uid in episode_uids if uid not in speed_scores or not np.isfinite(speed_scores[uid])]
+        missing_scores = [uid for uid in eligible_episode_uids if uid not in speed_scores or not np.isfinite(speed_scores[uid])]
         if missing_scores:
             raise ValueError(f"Missing finite episode speed scores for planner assignment: {missing_scores[:5]}")
-        ordered = sorted(episode_uids, key=lambda uid: (float(speed_scores[uid]), str(uid)))
+        ordered = sorted(eligible_episode_uids, key=lambda uid: (float(speed_scores[uid]), str(uid)))
         bins = [list(chunk) for chunk in np.array_split(np.asarray(ordered, dtype=object), min(len(ordered), int(speed_stratification_bins)))]
         # Allocate the global requested dropout count exactly, then distribute
         # its rounded per-bin quota across speed strata.  This preserves both
         # the requested 50/50 episode split and its fast-to-slow coverage.
-        requested_disabled = int(round(len(episode_uids) * float(dropout_episode_prob)))
+        requested_disabled = int(round(len(eligible_episode_uids) * float(dropout_episode_prob)))
         expected_counts = [len(raw_bin) * float(dropout_episode_prob) for raw_bin in bins]
         disabled_counts = [int(np.floor(value)) for value in expected_counts]
         remainder = requested_disabled - sum(disabled_counts)
@@ -671,12 +719,14 @@ def _build_planner_assignments(
             disabled_count = disabled_counts[bin_index]
             disabled.update(str(uid) for uid in shuffled_members[:disabled_count].tolist())
     else:
-        shuffled = np.asarray(episode_uids, dtype=object)
+        shuffled = np.asarray(eligible_episode_uids, dtype=object)
         np.random.default_rng(int(seed)).shuffle(shuffled)
-        disabled_count = int(round(len(episode_uids) * float(dropout_episode_prob)))
+        disabled_count = int(round(len(eligible_episode_uids) * float(dropout_episode_prob)))
         disabled = {str(uid) for uid in shuffled[:disabled_count].tolist()}
 
-    enabled_uids = [uid for uid in episode_uids if uid not in disabled]
+    disabled.update(forced_disabled)
+
+    enabled_uids = [uid for uid in eligible_episode_uids if uid not in disabled]
 
     view_assignments = _assign_categories(enabled_uids, view_mode_probs, seed=int(seed) + 1009)
     branch_assignments = _assign_categories(enabled_uids, branch_probs, seed=int(seed) + 2003)
@@ -736,6 +786,148 @@ def _planner_assignment_summary(assignments: dict[str, PlannerAssignment] | None
         "branches": counts([assignment.branch for assignment in enabled]),
         "value_variants": counts([assignment.value_variant for assignment in enabled]),
     }
+
+
+def _planner_required_feature_keys(value_variant: str) -> tuple[str, ...]:
+    state_key = "raw_state_belief" if value_variant == "raw" else "final_state_belief"
+    keys = ["history_positions", "history_valid_mask"]
+    for branch in ("posterior", "prior"):
+        keys.extend(
+            [
+                f"{branch}_{state_key}",
+                f"{branch}_progress_transition",
+                f"{branch}_uncertainty_features",
+                f"{branch}_temporal_latent",
+            ]
+        )
+    return tuple(keys)
+
+
+def _npz_first_axis_length(archive: Any, key: str) -> int:
+    """Read an NPZ member's NPY header without materializing its feature array."""
+    member_name = f"{key}.npy"
+    with archive.zip.open(member_name) as member:
+        version = np.lib.format.read_magic(member)
+        if version == (1, 0):
+            shape, _fortran_order, _dtype = np.lib.format.read_array_header_1_0(member)
+        elif version in {(2, 0), (3, 0)}:
+            shape, _fortran_order, _dtype = np.lib.format.read_array_header_2_0(member)
+        else:
+            raise ValueError(f"Unsupported NPY version {version} for {key!r}")
+    if not shape:
+        raise ValueError(f"Planner feature {key!r} must have a row axis, but is scalar.")
+    return int(shape[0])
+
+
+def _planner_episode_coverage(
+    *,
+    dataset_root: Path,
+    episode_table: pd.DataFrame,
+    episode_uids: list[str],
+    frame_stride: int,
+    action_horizon: int,
+    action_chunk_stride: int,
+    drop_horizon_clipped: bool,
+    planner_export_root: Path,
+    required_view_modes: list[str],
+    planner_index_name: str,
+    planner_arrays_name: str,
+    planner_complete_marker_name: str,
+    require_complete_marker: bool,
+    planner_value_variant: str,
+) -> PlannerEpisodeCoverage:
+    """Find episodes whose planner exports cover every manifest base row.
+
+    This deliberately checks all required view modes, even though
+    ``episode_sampled`` later chooses only one for a planner-present episode.
+    That makes an episode-level planner condition all-or-nothing: no episode
+    can be selected as planner-present and later fail because its sampled view
+    has a partial export.
+    """
+    required_view_modes = list(dict.fromkeys(str(mode) for mode in required_view_modes if str(mode).strip()))
+    if not required_view_modes:
+        raise ValueError(
+            "--planner-force-dropout-on-incomplete-episode requires at least one "
+            "--planner-required-complete-view-modes value."
+        )
+
+    table_by_uid = episode_table.set_index("episode_uid", drop=False)
+    feature_keys = _planner_required_feature_keys(planner_value_variant)
+    eligible: set[str] = set()
+    forced_disabled: set[str] = set()
+    failure_reasons: dict[str, tuple[str, ...]] = {}
+
+    for episode_uid in tqdm(
+        episode_uids,
+        desc="Check complete planner episodes",
+        unit="episode",
+        dynamic_ncols=True,
+    ):
+        meta = table_by_uid.loc[episode_uid]
+        episode_root = dataset_root / "episodes" / episode_uid
+        arrays_root = episode_root / "arrays"
+        try:
+            state_len = int(np.load(arrays_root / "state_65d.npy", mmap_mode="r").shape[0])
+            action_len = int(np.load(arrays_root / "action_65d.npy", mmap_mode="r").shape[0])
+            tactile_len = int(np.load(arrays_root / "tactile_60d.npy", mmap_mode="r").shape[0])
+        except Exception as exc:  # A malformed episode cannot receive planner features.
+            forced_disabled.add(episode_uid)
+            failure_reasons[episode_uid] = (f"required episode array error: {exc}",)
+            continue
+
+        num_frames = min(int(meta["num_frames"]), state_len, tactile_len)
+        if drop_horizon_clipped:
+            max_start = min(num_frames, action_len - (action_horizon - 1) * action_chunk_stride)
+            base_positions = np.arange(max(0, max_start), dtype=np.int64)
+        else:
+            base_positions = np.arange(num_frames, dtype=np.int64)
+        base_positions = base_positions[::frame_stride]
+
+        reasons: list[str] = []
+        for view_mode in required_view_modes:
+            output_dir = planner_export_root / episode_uid / view_mode
+            index_path = output_dir / planner_index_name
+            arrays_path = output_dir / planner_arrays_name
+            marker_path = output_dir / planner_complete_marker_name
+            if not index_path.is_file() or not arrays_path.is_file() or (require_complete_marker and not marker_path.is_file()):
+                reasons.append(f"{view_mode}: missing index, arrays, or complete marker")
+                continue
+            try:
+                planner_index = pd.read_parquet(index_path, columns=["frame_position"])
+                positions = planner_index["frame_position"].to_numpy(dtype=np.int64, copy=True)
+                if len(np.unique(positions)) != len(positions):
+                    reasons.append(f"{view_mode}: duplicate frame_position values")
+                    continue
+                with np.load(arrays_path, allow_pickle=False) as archive:
+                    missing_keys = [key for key in feature_keys if key not in archive.files]
+                    if missing_keys:
+                        reasons.append(f"{view_mode}: missing NPZ features {missing_keys}")
+                        continue
+                    invalid_shapes = [
+                        key for key in feature_keys if _npz_first_axis_length(archive, key) != len(positions)
+                    ]
+                    if invalid_shapes:
+                        reasons.append(f"{view_mode}: NPZ/index row mismatch for {invalid_shapes}")
+                        continue
+                missing_positions = int(np.count_nonzero(~np.isin(base_positions, positions)))
+                if missing_positions:
+                    reasons.append(f"{view_mode}: missing {missing_positions} of {len(base_positions)} valid action starts")
+            except Exception as exc:
+                reasons.append(f"{view_mode}: unreadable export ({exc})")
+
+        if reasons:
+            forced_disabled.add(episode_uid)
+            failure_reasons[episode_uid] = tuple(reasons)
+        else:
+            eligible.add(episode_uid)
+
+    if eligible | forced_disabled != set(episode_uids):
+        raise RuntimeError("Planner coverage gating failed to classify every requested episode.")
+    return PlannerEpisodeCoverage(
+        eligible_episode_uids=frozenset(eligible),
+        forced_disabled_episode_uids=frozenset(forced_disabled),
+        failure_reasons=failure_reasons,
+    )
 
 
 def _load_speed_weight_settings(args: argparse.Namespace) -> SpeedWeightSettings:
@@ -1490,11 +1682,43 @@ def main() -> int:
     )
     perturbation_settings = _load_planner_perturbation_settings(args)
     episode_speed_scores = _episode_speed_scores(speed_context, train_episodes)
+    drop_horizon_clipped = not bool(args.keep_horizon_clipped)
     if bool(args.planner_speed_stratified_assignment) and speed_context is None:
         raise ValueError(
             "--planner-speed-stratified-assignment requires --speed-weighting so speed strata can be "
             "computed from checkpoint-label durations."
         )
+
+    planner_coverage: PlannerEpisodeCoverage | None = None
+    forced_disabled_episode_uids: set[str] = set()
+    if bool(args.planner_force_dropout_on_incomplete_episode):
+        if planner_export_root is None:
+            raise ValueError(
+                "--planner-force-dropout-on-incomplete-episode requires --planner-export-root."
+            )
+        if str(args.planner_assignment_mode) != "episode_sampled":
+            raise ValueError(
+                "--planner-force-dropout-on-incomplete-episode requires "
+                "--planner-assignment-mode=episode_sampled."
+            )
+        required_modes = [str(mode) for mode in (args.planner_required_complete_view_modes or [])]
+        planner_coverage = _planner_episode_coverage(
+            dataset_root=dataset_root,
+            episode_table=episode_table,
+            episode_uids=episode_uids,
+            frame_stride=int(args.frame_stride),
+            action_horizon=int(args.action_horizon),
+            action_chunk_stride=int(args.action_chunk_stride),
+            drop_horizon_clipped=drop_horizon_clipped,
+            planner_export_root=planner_export_root,
+            required_view_modes=required_modes,
+            planner_index_name=str(args.planner_index_name),
+            planner_arrays_name=str(args.planner_arrays_name),
+            planner_complete_marker_name=str(args.planner_complete_marker_name),
+            require_complete_marker=bool(args.require_planner_complete_marker),
+            planner_value_variant=str(args.planner_value_variant),
+        )
+        forced_disabled_episode_uids = set(planner_coverage.forced_disabled_episode_uids)
 
     train_planner_assignments = _build_planner_assignments(
         train_episodes,
@@ -1508,6 +1732,7 @@ def main() -> int:
         speed_scores=episode_speed_scores,
         speed_stratified=bool(args.planner_speed_stratified_assignment),
         speed_stratification_bins=int(args.planner_speed_stratification_bins),
+        forced_disabled_episode_uids=forced_disabled_episode_uids.intersection(train_episodes),
     )
     val_planner_assignments = _build_planner_assignments(
         val_episodes,
@@ -1520,9 +1745,9 @@ def main() -> int:
         view_mode_probs=planner_view_mode_probs,
         branch_probs=planner_branch_probs,
         value_variant=str(args.planner_value_variant),
+        forced_disabled_episode_uids=forced_disabled_episode_uids.intersection(val_episodes),
     )
 
-    drop_horizon_clipped = not bool(args.keep_horizon_clipped)
     train_frame = _build_split_frame(
         dataset_root=dataset_root,
         split_name="train",
@@ -1621,6 +1846,26 @@ def main() -> int:
             "complete_marker_name": str(args.planner_complete_marker_name),
             "require_complete_marker": bool(args.require_planner_complete_marker),
             "allow_missing_rows": bool(args.allow_missing_planner_rows),
+            "coverage_gate": {
+                "enabled": bool(args.planner_force_dropout_on_incomplete_episode),
+                "required_view_modes": [str(mode) for mode in (args.planner_required_complete_view_modes or [])],
+                "eligible_episode_count": (
+                    None if planner_coverage is None else len(planner_coverage.eligible_episode_uids)
+                ),
+                "forced_disabled_episode_count": (
+                    None if planner_coverage is None else len(planner_coverage.forced_disabled_episode_uids)
+                ),
+                "forced_disabled_episode_uids": (
+                    []
+                    if planner_coverage is None
+                    else sorted(planner_coverage.forced_disabled_episode_uids)
+                ),
+                "failure_reasons": (
+                    {}
+                    if planner_coverage is None
+                    else {uid: list(reasons) for uid, reasons in sorted(planner_coverage.failure_reasons.items())}
+                ),
+            },
             "speed_stratified_assignment": bool(args.planner_speed_stratified_assignment),
             "speed_stratification_bins": int(args.planner_speed_stratification_bins),
             "perturbation": {
@@ -1703,6 +1948,13 @@ def main() -> int:
         print(f"  train_modes   : {train_planner_view_modes}")
         print(f"  val_modes     : {val_planner_view_modes}")
         print(f"  value_variant : {args.planner_value_variant}")
+        if planner_coverage is not None:
+            print(
+                "  coverage gate : "
+                f"eligible={len(planner_coverage.eligible_episode_uids)} "
+                f"forced_disabled={len(planner_coverage.forced_disabled_episode_uids)} "
+                f"required_modes={list(args.planner_required_complete_view_modes or [])}"
+            )
         if train_planner_assignments is None:
             print(f"  planner_branch: {args.planner_branch}")
         else:

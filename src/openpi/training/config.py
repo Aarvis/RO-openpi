@@ -450,6 +450,12 @@ class OrigamiCompActionChunkManifestBuildConfig:
     planner_value_variant: Literal["final", "raw"] = "final"
     planner_assignment_seed: int = 1234
     planner_dropout_episode_prob: float = 0.16
+    # When enabled, an episode is eligible for planner-present assignment only
+    # when *every* valid action-chunk start is represented in every required
+    # planner export. Incomplete episodes are always planner-dropped instead
+    # of silently losing planner rows partway through an episode.
+    planner_force_dropout_on_incomplete_episode: bool = False
+    planner_required_complete_view_modes: tuple[str, ...] = ()
     # Phase-two robustness settings. They are opt-in: a zero perturbation
     # probability preserves the pre-existing manifest behavior exactly.
     planner_speed_stratified_assignment: bool = False
@@ -2944,7 +2950,22 @@ _CONFIGS.append(
                 train_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
                 val_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
                 planner_value_variant="raw",
-                planner_dropout_episode_prob=0.45,
+                # Applied only to coverage-complete episodes. Together with
+                # the forced-disabled partial episodes this yields an overall
+                # rate very close to the intended 50/50 episode split.
+                planner_dropout_episode_prob=0.50,
+                # Planner-present is all-or-nothing per episode.  Before
+                # assignment, require complete exports for every Phase-2 view
+                # mode at every valid H25/S1 action start.  Partial episodes
+                # are forced into the planner-dropped group; the configured
+                # dropout probability is then sampled only among complete
+                # episodes, while retaining speed stratification.
+                planner_force_dropout_on_incomplete_episode=True,
+                planner_required_complete_view_modes=(
+                    "frame_stride_25",
+                    "frame_stride_30",
+                    "random_mix",
+                ),
                 planner_speed_stratified_assignment=True,
                 planner_speed_stratification_bins=10,
                 planner_perturb_present_row_prob=0.27,
