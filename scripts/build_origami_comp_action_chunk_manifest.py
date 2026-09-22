@@ -105,7 +105,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--planner-dropout-episode-prob",
         type=float,
         default=0.16,
-        help="Episode-level probability of disabling planner prefixes in episode_sampled mode.",
+        help=(
+            "Target episode-level planner-drop probability in episode_sampled mode. "
+            "When coverage gating is enabled, forced-disabled incomplete episodes count toward this total."
+        ),
     )
     parser.add_argument(
         "--planner-force-dropout-on-incomplete-episode",
@@ -665,6 +668,7 @@ def _build_planner_assignments(
     speed_stratified: bool = False,
     speed_stratification_bins: int = 10,
     forced_disabled_episode_uids: set[str] | frozenset[str] | None = None,
+    maintain_total_dropout_target: bool = True,
 ) -> dict[str, PlannerAssignment] | None:
     if not enabled or assignment_mode == "expand_view_modes":
         return None
@@ -681,10 +685,33 @@ def _build_planner_assignments(
         raise ValueError(f"Forced planner-disabled episodes are outside this split: {sorted(unknown_forced)[:5]}")
     eligible_episode_uids = [uid for uid in episode_uids if uid not in forced_disabled]
     if not eligible_episode_uids:
+        if maintain_total_dropout_target:
+            requested_disabled = int(round(len(episode_uids) * float(dropout_episode_prob)))
+            if len(forced_disabled) > requested_disabled:
+                raise ValueError(
+                    "Coverage-forced planner dropout already exceeds the requested total dropout target: "
+                    f"forced={len(forced_disabled)} target={requested_disabled} total={len(episode_uids)}."
+                )
         return {
             uid: PlannerAssignment(enabled=False, value_variant=value_variant)
             for uid in episode_uids
         }
+
+    if maintain_total_dropout_target:
+        # The requested probability describes the entire split, not merely the
+        # coverage-complete subset.  Count forced-disabled partial episodes
+        # first, then select only the remaining quota from eligible episodes.
+        requested_disabled = int(round(len(episode_uids) * float(dropout_episode_prob)))
+        if len(forced_disabled) > requested_disabled:
+            raise ValueError(
+                "Coverage-forced planner dropout exceeds the requested total dropout target: "
+                f"forced={len(forced_disabled)} target={requested_disabled} total={len(episode_uids)}. "
+                "Increase planner_dropout_episode_prob or disable coverage gating."
+            )
+        disabled_from_eligible = requested_disabled - len(forced_disabled)
+    else:
+        disabled_from_eligible = int(round(len(eligible_episode_uids) * float(dropout_episode_prob)))
+    eligible_dropout_prob = float(disabled_from_eligible) / float(len(eligible_episode_uids))
 
     if speed_stratified:
         if speed_scores is None:
@@ -697,13 +724,12 @@ def _build_planner_assignments(
             raise ValueError(f"Missing finite episode speed scores for planner assignment: {missing_scores[:5]}")
         ordered = sorted(eligible_episode_uids, key=lambda uid: (float(speed_scores[uid]), str(uid)))
         bins = [list(chunk) for chunk in np.array_split(np.asarray(ordered, dtype=object), min(len(ordered), int(speed_stratification_bins)))]
-        # Allocate the global requested dropout count exactly, then distribute
-        # its rounded per-bin quota across speed strata.  This preserves both
-        # the requested 50/50 episode split and its fast-to-slow coverage.
-        requested_disabled = int(round(len(eligible_episode_uids) * float(dropout_episode_prob)))
-        expected_counts = [len(raw_bin) * float(dropout_episode_prob) for raw_bin in bins]
+        # Allocate the remaining eligible quota exactly, then distribute its
+        # rounded per-bin quota across speed strata. This preserves the global
+        # configured target after coverage-forced episodes are counted.
+        expected_counts = [len(raw_bin) * eligible_dropout_prob for raw_bin in bins]
         disabled_counts = [int(np.floor(value)) for value in expected_counts]
-        remainder = requested_disabled - sum(disabled_counts)
+        remainder = disabled_from_eligible - sum(disabled_counts)
         order = sorted(
             range(len(bins)),
             key=lambda index: (expected_counts[index] - disabled_counts[index], -index),
@@ -721,8 +747,7 @@ def _build_planner_assignments(
     else:
         shuffled = np.asarray(eligible_episode_uids, dtype=object)
         np.random.default_rng(int(seed)).shuffle(shuffled)
-        disabled_count = int(round(len(eligible_episode_uids) * float(dropout_episode_prob)))
-        disabled = {str(uid) for uid in shuffled[:disabled_count].tolist()}
+        disabled = {str(uid) for uid in shuffled[:disabled_from_eligible].tolist()}
 
     disabled.update(forced_disabled)
 
@@ -1746,6 +1771,11 @@ def main() -> int:
         branch_probs=planner_branch_probs,
         value_variant=str(args.planner_value_variant),
         forced_disabled_episode_uids=forced_disabled_episode_uids.intersection(val_episodes),
+        # Validation intentionally remains clean (zero sampled dropout when
+        # perturbations are enabled). Coverage-incomplete validation episodes
+        # are still safely planner-disabled, but do not make a zero target
+        # mathematically impossible.
+        maintain_total_dropout_target=False,
     )
 
     train_frame = _build_split_frame(

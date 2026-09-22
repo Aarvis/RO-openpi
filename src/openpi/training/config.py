@@ -2950,9 +2950,9 @@ _CONFIGS.append(
                 train_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
                 val_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
                 planner_value_variant="raw",
-                # Applied only to coverage-complete episodes. Together with
-                # the forced-disabled partial episodes this yields an overall
-                # rate very close to the intended 50/50 episode split.
+                # Target over every dataset episode. Coverage-forced partial
+                # episodes count toward this total; the builder samples only
+                # the remaining disabled quota from complete episodes.
                 planner_dropout_episode_prob=0.50,
                 # Planner-present is all-or-nothing per episode.  Before
                 # assignment, require complete exports for every Phase-2 view
