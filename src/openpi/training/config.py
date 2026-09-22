@@ -450,6 +450,23 @@ class OrigamiCompActionChunkManifestBuildConfig:
     planner_value_variant: Literal["final", "raw"] = "final"
     planner_assignment_seed: int = 1234
     planner_dropout_episode_prob: float = 0.16
+    # Phase-two robustness settings. They are opt-in: a zero perturbation
+    # probability preserves the pre-existing manifest behavior exactly.
+    planner_speed_stratified_assignment: bool = False
+    planner_speed_stratification_bins: int = 10
+    # Conditional probability among rows from planner-enabled episodes.
+    planner_perturb_present_row_prob: float = 0.0
+    planner_perturb_offset_probs: dict[int, float] = dataclasses.field(
+        default_factory=lambda: {-2: 0.10, -1: 0.40, 1: 0.40, 2: 0.10}
+    )
+    # Donors always come from a non-transition progress segment. Negative
+    # offsets use the tail of the preceding segment; positive offsets use the
+    # head of the following segment.
+    planner_perturb_previous_tail_fraction: float = 0.30
+    planner_perturb_next_head_fraction: float = 0.30
+    planner_perturb_previous_two_tail_fraction: float = 0.10
+    planner_perturb_next_two_head_fraction: float = 0.10
+    planner_perturb_seed: int = 5678
     planner_view_mode_probs: dict[str, float] = dataclasses.field(
         default_factory=lambda: {
             "frame_stride_10": 0.5,
@@ -2600,7 +2617,7 @@ _CONFIGS = [
             pi05=True,
             action_dim=65,
             state_dim=65,
-            action_horizon=10,
+            action_horizon=25,
             # Re-measure with scripts/scan_origami_comp_prompt_token_lengths.py after norm stats are computed.
             max_token_len=768,
             discrete_state_input=True,
@@ -2711,7 +2728,7 @@ _CONFIGS = [
                 val_planner_view_modes=("frame_stride_10", "random_mix"),
                 planner_value_variant="final",
                 planner_assignment_seed=1234,
-                planner_dropout_episode_prob=0.16,
+                planner_dropout_episode_prob=1.00,
                 planner_view_mode_probs={
                     "frame_stride_10": 0.5,
                     "random_mix": 0.25,
@@ -2734,8 +2751,8 @@ _CONFIGS = [
                 speed_final_unpaired_policy="keep",
                 speed_done_policy="neutral",
                 speed_alpha=2.2,
-                speed_min_weight=0.65,
-                speed_max_weight=1.5,
+                speed_min_weight=0.7,
+                speed_max_weight=1.3,
                 speed_epsilon_frames=1.0e-6,
                 speed_weight_val=False,
                 train_index_name="train_index.parquet",
@@ -2802,10 +2819,10 @@ _CONFIGS = [
             ),
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=2_000,
-            peak_lr=2e-4,
-            decay_steps=60_000,
-            decay_lr=2e-6,
+            warmup_steps=700,
+            peak_lr=8e-5,
+            decay_steps=87_500,
+            decay_lr=1e-6,
         ),
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=0.999,
@@ -2816,17 +2833,18 @@ _CONFIGS = [
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
         ),
         batch_size=32,
-        num_workers=8,
-        num_train_steps=60_000,
-        log_interval=100,
+        num_workers=16,
+        num_train_steps=87_500, #140_000,
+        log_interval=50,
         run_val=False,
         val_repo_id=None,
         val_frequency=2_000,
         val_batch_size=32,
         checkpoint_strategy="manual",
-        save_interval=5_000,
-        keep_period=10_000,
-        max_to_keep=3,
+        save_steps=(20_000, 40_000, 60_000),
+        # save_interval=5_000,
+        # keep_period=10_000,
+        max_to_keep=20,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
@@ -2885,6 +2903,96 @@ _CONFIGS = [
 _ORIGAMI_COMP_ACTION_CHUNK_CONFIG = next(
     config for config in _CONFIGS if config.name == "pi05_origami_comp_action_chunk"
 )
+
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_MANIFEST_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner_phase2_f25_f30_raw"
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_SHARD_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner_phase2_f25_f30_raw"
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_EXPORT_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/checkpoint_planner_vla_rollout_exports/"
+    "no_hmm_224_headleft_tactile_distill_unseen_F25_F30_F50"
+)
+
+_CONFIGS.append(
+    dataclasses.replace(
+        _ORIGAMI_COMP_ACTION_CHUNK_CONFIG,
+        name="pi05_origami_comp_action_chunk_phase2",
+        # Phase 2 owns these action-target settings.  They are deliberately
+        # independent from Phase 1: edit the two literals here, then rebuild
+        # the Phase 2 manifest and shards.
+        model=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model,
+            action_horizon=25,
+        ),
+        data=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data,
+            manifest_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_MANIFEST_ROOT,
+            # Phase 2 consumes rebuilt immutable shards, not the Phase 1 rows.
+            dataset_backend="shard",
+            shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_SHARD_ROOT,
+            planner_branch="posterior",
+            planner_value_variant="raw",
+            action_chunk_stride=1,
+            manifest_build=dataclasses.replace(
+                _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.manifest_build,
+                planner_export_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_EXPORT_ROOT,
+                train_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
+                val_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
+                planner_value_variant="raw",
+                planner_dropout_episode_prob=0.45,
+                planner_speed_stratified_assignment=True,
+                planner_speed_stratification_bins=10,
+                planner_perturb_present_row_prob=0.27,
+                planner_perturb_offset_probs={-2: 0.05, -1: 0.30, 1: 0.50, 2: 0.15},
+                planner_perturb_previous_tail_fraction=0.30,
+                planner_perturb_next_head_fraction=0.30,
+                planner_perturb_previous_two_tail_fraction=0.10,
+                planner_perturb_next_two_head_fraction=0.10,
+                planner_perturb_seed=5678,
+                planner_view_mode_probs={
+                    "frame_stride_25": 1.0 / 3.0,
+                    "frame_stride_30": 1.0 / 3.0,
+                    "random_mix": 1.0 / 3.0,
+                },
+                planner_branch_probs={"posterior": 0.5, "prior": 0.5},
+            ),
+            shard_build=dataclasses.replace(
+                _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.shard_build,
+                shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_SHARD_ROOT,
+                overwrite=False,
+                skip_existing=True,
+            ),
+        ),
+        # Phase 2 must restore the full Phase 1 model, including the action,
+        # planner, and tactile-adapter parameters.
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            # Replace the experiment and step components with the completed
+            # Phase 1 run. This must be the checkpoint's `params` directory.
+            "E:/Robot-Origami-Challenge/openpi/checkpoints/pi05_origami_comp_action_chunk/"
+            "REPLACE_WITH_PHASE1_EXPERIMENT/REPLACE_WITH_PHASE1_STEP/params"
+        ),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=200,
+            peak_lr=1e-5,
+            decay_steps=60_000,
+            decay_lr=1e-6,
+        ),
+        # Intentionally explicit Phase 2 controls. Adjust these here without
+        # changing the original Phase 1 recipe.
+        batch_size=32,
+        num_workers=8,
+        num_train_steps=60_000,
+        checkpoint_strategy="manual",
+        save_steps=(1_000, 2_000, 3_000, 5_000, 10_000, 20_000, 40_000, 60_000),
+        max_to_keep=10,
+    )
+)
+
 _ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT = (
     "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
     "metadata/openpi_origami_comp_action_spline/no_hmm_224_headleft_tactile_prompt_planner"

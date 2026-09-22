@@ -773,6 +773,14 @@ class OrigamiVlaDataset:
                 )
             else:
                 planner_row_index = int(row["planner_row_index"])
+                donor_row_index = int(row.get("planner_donor_row_index", -1))
+                planner_decision_row_index = (
+                    donor_row_index
+                    if _row_bool(row.get("planner_perturbed", False), default=False)
+                    else planner_row_index
+                )
+                if planner_decision_row_index < 0:
+                    raise ValueError("Perturbed planner row is missing a valid planner_donor_row_index.")
                 planner_branch_value = row.get("planner_branch", self._settings.planner_branch)
                 if pd.isna(planner_branch_value):
                     planner_branch_value = self._settings.planner_branch
@@ -789,16 +797,20 @@ class OrigamiVlaDataset:
                                 planner,
                                 _planner_state_belief_key(planner_value_variant),
                                 planner_branch,
-                                planner_row_index,
+                                planner_decision_row_index,
                             ),
                             dtype=np.float32,
                         ),
                         "planner_progress_transition": np.asarray(
-                            _read_planner_feature(planner, "progress_transition", planner_branch, planner_row_index),
+                            _read_planner_feature(
+                                planner, "progress_transition", planner_branch, planner_decision_row_index
+                            ),
                             dtype=np.float32,
                         ),
                         "planner_uncertainty": np.asarray(
-                            _read_planner_feature(planner, "uncertainty_features", planner_branch, planner_row_index),
+                            _read_planner_feature(
+                                planner, "uncertainty_features", planner_branch, planner_decision_row_index
+                            ),
                             dtype=np.float32,
                         ),
                         "planner_history_latent": np.asarray(

@@ -674,24 +674,32 @@ def _build_one_shard(task: dict[str, Any]) -> dict[str, Any]:
                                 planner = _load_npz(planner_output_dir / settings.planner_arrays_filename)
                                 planner_archives[planner_key] = planner
                             planner_row_index = int(row["planner_row_index"])
+                            donor_row_index = int(row.get("planner_donor_row_index", -1))
+                            planner_decision_row_index = (
+                                donor_row_index
+                                if _shards._row_bool(row.get("planner_perturbed", False), default=False)
+                                else planner_row_index
+                            )
+                            if planner_decision_row_index < 0:
+                                raise ValueError("Perturbed planner row is missing a valid planner_donor_row_index.")
                             arrays["planner_state_belief"][local_row] = np.asarray(
                                 _shards._read_planner_feature(
                                     planner,
                                     _shards._planner_state_belief_key(value_variant),
                                     branch,
-                                    planner_row_index,
+                                    planner_decision_row_index,
                                 ),
                                 dtype=np.float32,
                             )
                             arrays["planner_progress_transition"][local_row] = np.asarray(
                                 _shards._read_planner_feature(
-                                    planner, "progress_transition", branch, planner_row_index
+                                    planner, "progress_transition", branch, planner_decision_row_index
                                 ),
                                 dtype=np.float32,
                             )
                             arrays["planner_uncertainty"][local_row] = np.asarray(
                                 _shards._read_planner_feature(
-                                    planner, "uncertainty_features", branch, planner_row_index
+                                    planner, "uncertainty_features", branch, planner_decision_row_index
                                 ),
                                 dtype=np.float32,
                             )

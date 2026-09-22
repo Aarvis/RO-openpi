@@ -173,22 +173,30 @@ def _read_live_sample(
                 planner = np.load(planner_output_dir / settings.planner_arrays_filename, allow_pickle=False)
                 planner_cache[cache_key] = planner
             planner_row_index = int(row["planner_row_index"])
+            donor_row_index = int(row.get("planner_donor_row_index", -1))
+            planner_decision_row_index = (
+                donor_row_index
+                if _shards._row_bool(row.get("planner_perturbed", False), default=False)
+                else planner_row_index
+            )
+            if planner_decision_row_index < 0:
+                raise ValueError("Perturbed planner row is missing a valid planner_donor_row_index.")
             branch = str(branch_value)
             output["planner_state_belief"] = np.asarray(
                 _shards._read_planner_feature(
                     planner,
                     _shards._planner_state_belief_key(str(variant_value)),
                     branch,
-                    planner_row_index,
+                    planner_decision_row_index,
                 ),
                 dtype=np.float32,
             )
             output["planner_progress_transition"] = np.asarray(
-                _shards._read_planner_feature(planner, "progress_transition", branch, planner_row_index),
+                _shards._read_planner_feature(planner, "progress_transition", branch, planner_decision_row_index),
                 dtype=np.float32,
             )
             output["planner_uncertainty"] = np.asarray(
-                _shards._read_planner_feature(planner, "uncertainty_features", branch, planner_row_index),
+                _shards._read_planner_feature(planner, "uncertainty_features", branch, planner_decision_row_index),
                 dtype=np.float32,
             )
             output["planner_history_latent"] = np.asarray(

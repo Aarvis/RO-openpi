@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,6 +107,39 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.16,
         help="Episode-level probability of disabling planner prefixes in episode_sampled mode.",
     )
+    parser.add_argument(
+        "--planner-speed-stratified-assignment",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Balance planner-dropped and planner-present episodes within episode-speed quantile bins.",
+    )
+    parser.add_argument(
+        "--planner-speed-stratification-bins",
+        type=int,
+        default=10,
+        help="Number of non-empty episode-speed bins used for planner assignment.",
+    )
+    parser.add_argument(
+        "--planner-perturb-present-row-prob",
+        type=float,
+        default=0.0,
+        help=(
+            "Conditional probability of perturbing a row from a planner-enabled episode. "
+            "A perturbed row keeps its history latent but gets decision features from a stable "
+            "neighboring checkpoint."
+        ),
+    )
+    parser.add_argument(
+        "--planner-perturb-offset-probs",
+        nargs="*",
+        default=None,
+        help="Neighbor-offset probability map, e.g. -2=0.1 -1=0.4 1=0.4 2=0.1.",
+    )
+    parser.add_argument("--planner-perturb-previous-tail-fraction", type=float, default=0.30)
+    parser.add_argument("--planner-perturb-next-head-fraction", type=float, default=0.30)
+    parser.add_argument("--planner-perturb-previous-two-tail-fraction", type=float, default=0.10)
+    parser.add_argument("--planner-perturb-next-two-head-fraction", type=float, default=0.10)
+    parser.add_argument("--planner-perturb-seed", type=int, default=5678)
     parser.add_argument(
         "--planner-view-mode-probs",
         nargs="*",
@@ -281,6 +315,48 @@ def _resolve_args_from_config(args: argparse.Namespace) -> argparse.Namespace:
         "--planner-dropout-episode-prob",
     )
     set_if_config(
+        "planner_speed_stratified_assignment",
+        bool(build_config.planner_speed_stratified_assignment),
+        "--planner-speed-stratified-assignment",
+        "--no-planner-speed-stratified-assignment",
+    )
+    set_if_config(
+        "planner_speed_stratification_bins",
+        int(build_config.planner_speed_stratification_bins),
+        "--planner-speed-stratification-bins",
+    )
+    set_if_config(
+        "planner_perturb_present_row_prob",
+        float(build_config.planner_perturb_present_row_prob),
+        "--planner-perturb-present-row-prob",
+    )
+    set_if_config(
+        "planner_perturb_offset_probs",
+        _probability_map_cli_values(build_config.planner_perturb_offset_probs),
+        "--planner-perturb-offset-probs",
+    )
+    set_if_config(
+        "planner_perturb_previous_tail_fraction",
+        float(build_config.planner_perturb_previous_tail_fraction),
+        "--planner-perturb-previous-tail-fraction",
+    )
+    set_if_config(
+        "planner_perturb_next_head_fraction",
+        float(build_config.planner_perturb_next_head_fraction),
+        "--planner-perturb-next-head-fraction",
+    )
+    set_if_config(
+        "planner_perturb_previous_two_tail_fraction",
+        float(build_config.planner_perturb_previous_two_tail_fraction),
+        "--planner-perturb-previous-two-tail-fraction",
+    )
+    set_if_config(
+        "planner_perturb_next_two_head_fraction",
+        float(build_config.planner_perturb_next_two_head_fraction),
+        "--planner-perturb-next-two-head-fraction",
+    )
+    set_if_config("planner_perturb_seed", int(build_config.planner_perturb_seed), "--planner-perturb-seed")
+    set_if_config(
         "planner_view_mode_probs",
         _probability_map_cli_values(build_config.planner_view_mode_probs),
         "--planner-view-mode-probs",
@@ -332,6 +408,8 @@ class SemanticCheckpointSpan:
     end_frame_exclusive: int
     num_frames: int
     is_done: bool
+    progress_start_frame: int
+    progress_end_frame_exclusive: int
 
 
 @dataclass(frozen=True)
@@ -369,6 +447,17 @@ class PlannerAssignment:
     view_mode: str = ""
     branch: str = ""
     value_variant: str = "final"
+
+
+@dataclass(frozen=True)
+class PlannerPerturbationSettings:
+    present_row_prob: float
+    offset_probs: dict[int, float]
+    previous_tail_fraction: float
+    next_head_fraction: float
+    previous_two_tail_fraction: float
+    next_two_head_fraction: float
+    seed: int
 
 
 def _load_episode_table(dataset_root: Path) -> pd.DataFrame:
@@ -465,6 +554,31 @@ def _parse_probability_map(
     return {key: float(value) / total for key, value in raw.items()}
 
 
+def _parse_int_probability_map(
+    values: list[str] | None,
+    *,
+    default: dict[int, float],
+    option_name: str,
+) -> dict[int, float]:
+    parsed = _parse_probability_map(
+        values,
+        default={str(key): float(value) for key, value in default.items()},
+        option_name=option_name,
+    )
+    result: dict[int, float] = {}
+    for raw_key, value in parsed.items():
+        try:
+            key = int(raw_key)
+        except ValueError as exc:
+            raise ValueError(f"{option_name} offset keys must be integers, got {raw_key!r}") from exc
+        if key not in {-2, -1, 1, 2}:
+            raise ValueError(f"{option_name} only supports offsets -2, -1, 1, and 2, got {key}")
+        result[key] = float(value)
+    if not result:
+        raise ValueError(f"{option_name} must contain at least one offset.")
+    return result
+
+
 def _exact_category_counts(probabilities: dict[str, float], total: int) -> dict[str, int]:
     if total <= 0:
         return {key: 0 for key in probabilities}
@@ -511,6 +625,9 @@ def _build_planner_assignments(
     view_mode_probs: dict[str, float],
     branch_probs: dict[str, float],
     value_variant: str,
+    speed_scores: dict[str, float] | None = None,
+    speed_stratified: bool = False,
+    speed_stratification_bins: int = 10,
 ) -> dict[str, PlannerAssignment] | None:
     if not enabled or assignment_mode == "expand_view_modes":
         return None
@@ -518,11 +635,47 @@ def _build_planner_assignments(
         raise ValueError(f"Unsupported planner assignment mode: {assignment_mode!r}")
     if not 0.0 <= float(dropout_episode_prob) <= 1.0:
         raise ValueError(f"--planner-dropout-episode-prob must satisfy 0 <= p <= 1, got {dropout_episode_prob}")
+    if speed_stratified and int(speed_stratification_bins) <= 0:
+        raise ValueError("--planner-speed-stratification-bins must be positive when speed stratification is enabled.")
 
-    shuffled = np.asarray(episode_uids, dtype=object)
-    np.random.default_rng(int(seed)).shuffle(shuffled)
-    disabled_count = int(round(len(episode_uids) * float(dropout_episode_prob)))
-    disabled = {str(uid) for uid in shuffled[:disabled_count].tolist()}
+    if speed_stratified:
+        if speed_scores is None:
+            raise ValueError(
+                "Planner speed-stratified assignment requires episode speed scores; enable speed weighting "
+                "or provide a builder configuration that can compute checkpoint durations."
+            )
+        missing_scores = [uid for uid in episode_uids if uid not in speed_scores or not np.isfinite(speed_scores[uid])]
+        if missing_scores:
+            raise ValueError(f"Missing finite episode speed scores for planner assignment: {missing_scores[:5]}")
+        ordered = sorted(episode_uids, key=lambda uid: (float(speed_scores[uid]), str(uid)))
+        bins = [list(chunk) for chunk in np.array_split(np.asarray(ordered, dtype=object), min(len(ordered), int(speed_stratification_bins)))]
+        # Allocate the global requested dropout count exactly, then distribute
+        # its rounded per-bin quota across speed strata.  This preserves both
+        # the requested 50/50 episode split and its fast-to-slow coverage.
+        requested_disabled = int(round(len(episode_uids) * float(dropout_episode_prob)))
+        expected_counts = [len(raw_bin) * float(dropout_episode_prob) for raw_bin in bins]
+        disabled_counts = [int(np.floor(value)) for value in expected_counts]
+        remainder = requested_disabled - sum(disabled_counts)
+        order = sorted(
+            range(len(bins)),
+            key=lambda index: (expected_counts[index] - disabled_counts[index], -index),
+            reverse=True,
+        )
+        for bin_index in order[:remainder]:
+            disabled_counts[bin_index] += 1
+        disabled: set[str] = set()
+        for bin_index, raw_bin in enumerate(bins):
+            members = [str(uid) for uid in raw_bin]
+            shuffled_members = np.asarray(members, dtype=object)
+            np.random.default_rng(int(seed) + 10_007 * (bin_index + 1)).shuffle(shuffled_members)
+            disabled_count = disabled_counts[bin_index]
+            disabled.update(str(uid) for uid in shuffled_members[:disabled_count].tolist())
+    else:
+        shuffled = np.asarray(episode_uids, dtype=object)
+        np.random.default_rng(int(seed)).shuffle(shuffled)
+        disabled_count = int(round(len(episode_uids) * float(dropout_episode_prob)))
+        disabled = {str(uid) for uid in shuffled[:disabled_count].tolist()}
+
     enabled_uids = [uid for uid in episode_uids if uid not in disabled]
 
     view_assignments = _assign_categories(enabled_uids, view_mode_probs, seed=int(seed) + 1009)
@@ -540,6 +693,26 @@ def _build_planner_assignments(
                 value_variant=value_variant,
             )
     return assignments
+
+
+def _episode_speed_scores(speed_context: SpeedWeightContext | None, episode_uids: list[str]) -> dict[str, float] | None:
+    if speed_context is None:
+        return None
+    scores: dict[str, float] = {}
+    for episode_uid in episode_uids:
+        info = speed_context.label_infos.get(episode_uid)
+        if info is None:
+            continue
+        ratios = [
+            float(span.num_frames) / max(float(speed_context.median_durations.get(span.semantic_checkpoint_id, span.num_frames)), 1.0)
+            for span in info.semantic_spans
+            if not span.is_done
+        ]
+        if ratios:
+            # Lower score means faster relative execution. The value is used only
+            # for assignment strata, never as a training weight.
+            scores[episode_uid] = float(np.mean(np.asarray(ratios, dtype=np.float64)))
+    return scores
 
 
 def _planner_assignment_summary(assignments: dict[str, PlannerAssignment] | None) -> dict[str, Any]:
@@ -591,6 +764,25 @@ def _load_speed_weight_settings(args: argparse.Namespace) -> SpeedWeightSettings
         w_max=float(args.speed_max_weight),
         epsilon_frames=float(args.speed_epsilon_frames),
         weight_val=bool(args.speed_weight_val),
+    )
+
+
+def _load_planner_perturbation_settings(args: argparse.Namespace) -> PlannerPerturbationSettings:
+    probability = float(args.planner_perturb_present_row_prob)
+    if not 0.0 <= probability <= 1.0:
+        raise ValueError("--planner-perturb-present-row-prob must satisfy 0 <= p <= 1.")
+    return PlannerPerturbationSettings(
+        present_row_prob=probability,
+        offset_probs=_parse_int_probability_map(
+            args.planner_perturb_offset_probs,
+            default={-2: 0.10, -1: 0.40, 1: 0.40, 2: 0.10},
+            option_name="--planner-perturb-offset-probs",
+        ),
+        previous_tail_fraction=float(args.planner_perturb_previous_tail_fraction),
+        next_head_fraction=float(args.planner_perturb_next_head_fraction),
+        previous_two_tail_fraction=float(args.planner_perturb_previous_two_tail_fraction),
+        next_two_head_fraction=float(args.planner_perturb_next_two_head_fraction),
+        seed=int(args.planner_perturb_seed),
     )
 
 
@@ -668,6 +860,17 @@ def _load_label_info(episode_root: Path, settings: SpeedWeightSettings) -> Episo
 
         label = str(chunk[0].get("label", ""))
         is_done = len(chunk) < group_size or label.strip().lower() == "reset to default position"
+        # Transfer labels use one semantic checkpoint as a progress segment
+        # followed by its completed/transition segment. A perturbation donor is
+        # intentionally restricted to the progress portion, while target rows
+        # may lie anywhere in the complete semantic span.
+        progress_start_frame = int(chunk[0]["start_frame"])
+        progress_end_frame_exclusive = int(chunk[0]["end_frame_exclusive"])
+        if progress_end_frame_exclusive <= progress_start_frame:
+            raise ValueError(
+                f"{label_path}: invalid progress span [{progress_start_frame}, {progress_end_frame_exclusive}) "
+                f"for semantic checkpoint {semantic_id}"
+            )
         spans.append(
             SemanticCheckpointSpan(
                 semantic_checkpoint_id=semantic_id,
@@ -676,6 +879,8 @@ def _load_label_info(episode_root: Path, settings: SpeedWeightSettings) -> Episo
                 end_frame_exclusive=end_frame_exclusive,
                 num_frames=end_frame_exclusive - start_frame,
                 is_done=is_done,
+                progress_start_frame=progress_start_frame,
+                progress_end_frame_exclusive=progress_end_frame_exclusive,
             )
         )
         semantic_id += 1
@@ -932,6 +1137,166 @@ def _attach_disabled_planner_rows(base_frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def _seed_for(*parts: object) -> int:
+    payload = ":".join(str(part) for part in parts).encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "little")
+
+
+def _span_for_frame(info: EpisodeLabelInfo, frame_position: int) -> SemanticCheckpointSpan | None:
+    for span in info.semantic_spans:
+        if span.start_frame <= frame_position < span.end_frame_exclusive:
+            return span
+    return None
+
+
+def _donor_window(span: SemanticCheckpointSpan, *, offset: int, settings: PlannerPerturbationSettings) -> tuple[int, int]:
+    start = int(span.progress_start_frame)
+    end = int(span.progress_end_frame_exclusive)
+    length = end - start
+    if length <= 0:
+        return start, start
+    if offset == -1:
+        fraction = settings.previous_tail_fraction
+        return start + int(np.floor((1.0 - fraction) * length)), end
+    if offset == 1:
+        fraction = settings.next_head_fraction
+        return start, start + int(np.ceil(fraction * length))
+    if offset == -2:
+        fraction = settings.previous_two_tail_fraction
+        return start + int(np.floor((1.0 - fraction) * length)), end
+    if offset == 2:
+        fraction = settings.next_two_head_fraction
+        return start, start + int(np.ceil(fraction * length))
+    raise ValueError(f"Unsupported planner perturb offset: {offset}")
+
+
+def _planner_index_position_map(planner_output_dir: Path, planner_index_name: str) -> dict[int, int]:
+    index_path = planner_output_dir / planner_index_name
+    planner_index = pd.read_parquet(index_path)
+    if "planner_row_index" not in planner_index.columns:
+        planner_index = planner_index.copy()
+        planner_index["planner_row_index"] = planner_index.index.astype("int64")
+    required = {"frame_position", "planner_row_index"}
+    missing = required.difference(planner_index.columns)
+    if missing:
+        raise KeyError(f"{index_path} is missing required columns: {sorted(missing)}")
+    return {
+        int(frame_position): int(planner_row_index)
+        for frame_position, planner_row_index in planner_index[["frame_position", "planner_row_index"]].itertuples(index=False)
+    }
+
+
+def _attach_planner_perturbations(
+    frame: pd.DataFrame,
+    *,
+    label_infos: dict[str, EpisodeLabelInfo],
+    planner_index_name: str,
+    settings: PlannerPerturbationSettings,
+) -> pd.DataFrame:
+    """Attach deterministic same-episode neighboring-checkpoint donor mappings.
+
+    Target rows can be progress or transition rows. Donors are always selected
+    from the progress portion of a neighboring semantic checkpoint.
+    """
+    result = frame.copy()
+    result["planner_perturbed"] = False
+    result["planner_target_checkpoint_index"] = np.full(len(result), -1, dtype=np.int32)
+    result["planner_donor_frame_position"] = np.full(len(result), -1, dtype=np.int64)
+    result["planner_donor_row_index"] = np.full(len(result), -1, dtype=np.int64)
+    result["planner_donor_checkpoint_index"] = np.full(len(result), -1, dtype=np.int32)
+    result["planner_donor_offset"] = np.zeros(len(result), dtype=np.int8)
+    if settings.present_row_prob <= 0.0 or result.empty:
+        return result
+
+    for value, name in (
+        (settings.present_row_prob, "--planner-perturb-present-row-prob"),
+        (settings.previous_tail_fraction, "--planner-perturb-previous-tail-fraction"),
+        (settings.next_head_fraction, "--planner-perturb-next-head-fraction"),
+        (settings.previous_two_tail_fraction, "--planner-perturb-previous-two-tail-fraction"),
+        (settings.next_two_head_fraction, "--planner-perturb-next-two-head-fraction"),
+    ):
+        if not 0.0 <= float(value) <= 1.0:
+            raise ValueError(f"{name} must satisfy 0 <= value <= 1, got {value}")
+
+    enabled = result["planner_enabled"].astype(bool) if "planner_enabled" in result else pd.Series(True, index=result.index)
+    enabled_frame = result[enabled].copy()
+    for (episode_uid, view_mode, planner_output_dir), group in enabled_frame.groupby(
+        ["episode_uid", "view_mode", "planner_output_dir"], sort=True
+    ):
+        episode_uid = str(episode_uid)
+        info = label_infos.get(episode_uid)
+        if info is None:
+            raise KeyError(f"No checkpoint-label information is available for planner perturbation episode {episode_uid}")
+        position_to_row = _planner_index_position_map(Path(str(planner_output_dir)), planner_index_name)
+        spans_by_id = {span.semantic_checkpoint_id: span for span in info.semantic_spans if not span.is_done}
+
+        candidates_by_anchor: dict[int, list[tuple[int, list[tuple[int, int, float, np.ndarray]]]]] = {}
+        for row_index, row in group.iterrows():
+            target_position = int(row["frame_position"])
+            anchor = _span_for_frame(info, target_position)
+            if anchor is None or anchor.is_done:
+                continue
+            result.at[row_index, "planner_target_checkpoint_index"] = int(anchor.semantic_checkpoint_id)
+            donor_options: list[tuple[int, int, float, np.ndarray]] = []
+            for offset, probability in settings.offset_probs.items():
+                donor_span = spans_by_id.get(anchor.semantic_checkpoint_id + int(offset))
+                if donor_span is None:
+                    continue
+                start, end = _donor_window(donor_span, offset=int(offset), settings=settings)
+                positions = np.asarray(
+                    [position for position in range(start, end) if position in position_to_row], dtype=np.int64
+                )
+                if positions.size:
+                    donor_options.append(
+                        (int(offset), donor_span.semantic_checkpoint_id, float(probability), positions)
+                    )
+            if donor_options:
+                candidates_by_anchor.setdefault(anchor.semantic_checkpoint_id, []).append((int(row_index), donor_options))
+
+        for anchor_id, target_candidates in candidates_by_anchor.items():
+            target_count = int(round(len(target_candidates) * settings.present_row_prob))
+            if target_count <= 0:
+                continue
+            rng = np.random.default_rng(_seed_for(settings.seed, episode_uid, view_mode, anchor_id))
+            selected_indices = rng.choice(len(target_candidates), size=min(target_count, len(target_candidates)), replace=False)
+            for selected_index in np.asarray(selected_indices, dtype=np.int64).tolist():
+                manifest_row_index, donor_options = target_candidates[selected_index]
+                option_weights = np.asarray([option[2] for option in donor_options], dtype=np.float64)
+                option_weights /= option_weights.sum()
+                option = donor_options[int(rng.choice(len(donor_options), p=option_weights))]
+                offset, donor_checkpoint, _weight, donor_positions = option
+                donor_position = int(donor_positions[int(rng.integers(0, donor_positions.size))])
+                result.at[manifest_row_index, "planner_perturbed"] = True
+                result.at[manifest_row_index, "planner_donor_frame_position"] = donor_position
+                result.at[manifest_row_index, "planner_donor_row_index"] = position_to_row[donor_position]
+                result.at[manifest_row_index, "planner_donor_checkpoint_index"] = int(donor_checkpoint)
+                result.at[manifest_row_index, "planner_donor_offset"] = int(offset)
+    return result
+
+
+def _planner_perturbation_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    """Return auditable counts for the Phase 2 neighboring-donor policy."""
+    if frame.empty or "planner_perturbed" not in frame.columns:
+        return {"eligible_rows": 0, "perturbed_rows": 0, "by_offset": {}, "by_target_checkpoint": {}}
+    enabled = frame["planner_enabled"].astype(bool) if "planner_enabled" in frame.columns else pd.Series(True, index=frame.index)
+    perturbed = enabled & frame["planner_perturbed"].astype(bool)
+
+    def _counts(column: str) -> dict[str, int]:
+        if column not in frame.columns:
+            return {}
+        values = frame.loc[perturbed, column].astype("int64")
+        return {str(key): int(value) for key, value in values.value_counts().sort_index().items()}
+
+    return {
+        "eligible_rows": int(enabled.sum()),
+        "perturbed_rows": int(perturbed.sum()),
+        "perturbed_fraction_of_eligible": (float(perturbed.sum() / enabled.sum()) if int(enabled.sum()) else 0.0),
+        "by_offset": _counts("planner_donor_offset"),
+        "by_target_checkpoint": _counts("planner_target_checkpoint_index"),
+        "by_donor_checkpoint": _counts("planner_donor_checkpoint_index"),
+    }
+
+
 def _build_split_frame(
     *,
     dataset_root: Path,
@@ -1123,6 +1488,13 @@ def main() -> int:
         val_episodes=val_episodes,
         settings=speed_settings,
     )
+    perturbation_settings = _load_planner_perturbation_settings(args)
+    episode_speed_scores = _episode_speed_scores(speed_context, train_episodes)
+    if bool(args.planner_speed_stratified_assignment) and speed_context is None:
+        raise ValueError(
+            "--planner-speed-stratified-assignment requires --speed-weighting so speed strata can be "
+            "computed from checkpoint-label durations."
+        )
 
     train_planner_assignments = _build_planner_assignments(
         train_episodes,
@@ -1133,13 +1505,18 @@ def main() -> int:
         view_mode_probs=planner_view_mode_probs,
         branch_probs=planner_branch_probs,
         value_variant=str(args.planner_value_variant),
+        speed_scores=episode_speed_scores,
+        speed_stratified=bool(args.planner_speed_stratified_assignment),
+        speed_stratification_bins=int(args.planner_speed_stratification_bins),
     )
     val_planner_assignments = _build_planner_assignments(
         val_episodes,
         enabled=planner_export_root is not None,
         assignment_mode=str(args.planner_assignment_mode),
         seed=int(args.planner_assignment_seed) + 3001,
-        dropout_episode_prob=float(args.planner_dropout_episode_prob),
+        # Validation remains clean; Phase 2 planner dropout and donor errors
+        # are a training-only robustness policy.
+        dropout_episode_prob=(0.0 if perturbation_settings.present_row_prob > 0.0 else float(args.planner_dropout_episode_prob)),
         view_mode_probs=planner_view_mode_probs,
         branch_probs=planner_branch_probs,
         value_variant=str(args.planner_value_variant),
@@ -1191,6 +1568,26 @@ def main() -> int:
         use_speed_weights=speed_context is not None and speed_settings.weight_val,
     )
 
+    if planner_export_root is not None and perturbation_settings.present_row_prob > 0.0:
+        if speed_context is not None:
+            perturbation_label_infos = speed_context.label_infos
+        else:
+            perturbation_label_infos = {
+                episode_uid: _load_label_info(dataset_root / "episodes" / episode_uid, speed_settings)
+                for episode_uid in tqdm(
+                    train_episodes,
+                    desc="Load checkpoint labels for planner perturbations",
+                    unit="episode",
+                    dynamic_ncols=True,
+                )
+            }
+        train_frame = _attach_planner_perturbations(
+            train_frame,
+            label_infos=perturbation_label_infos,
+            planner_index_name=str(args.planner_index_name),
+            settings=perturbation_settings,
+        )
+
     output_root.mkdir(parents=True, exist_ok=True)
     train_path = output_root / args.train_index_name
     val_path = output_root / args.val_index_name
@@ -1224,6 +1621,19 @@ def main() -> int:
             "complete_marker_name": str(args.planner_complete_marker_name),
             "require_complete_marker": bool(args.require_planner_complete_marker),
             "allow_missing_rows": bool(args.allow_missing_planner_rows),
+            "speed_stratified_assignment": bool(args.planner_speed_stratified_assignment),
+            "speed_stratification_bins": int(args.planner_speed_stratification_bins),
+            "perturbation": {
+                "present_row_prob": float(perturbation_settings.present_row_prob),
+                "offset_probs": {str(key): float(value) for key, value in perturbation_settings.offset_probs.items()},
+                "previous_tail_fraction": float(perturbation_settings.previous_tail_fraction),
+                "next_head_fraction": float(perturbation_settings.next_head_fraction),
+                "previous_two_tail_fraction": float(perturbation_settings.previous_two_tail_fraction),
+                "next_two_head_fraction": float(perturbation_settings.next_two_head_fraction),
+                "seed": int(perturbation_settings.seed),
+                "train_summary": _planner_perturbation_summary(train_frame),
+                "val_summary": _planner_perturbation_summary(val_frame),
+            },
             "train_assignment_summary": _planner_assignment_summary(train_planner_assignments),
             "val_assignment_summary": _planner_assignment_summary(val_planner_assignments),
         },
@@ -1298,6 +1708,8 @@ def main() -> int:
         else:
             print(f"  train_planner : {_planner_assignment_summary(train_planner_assignments)}")
             print(f"  val_planner   : {_planner_assignment_summary(val_planner_assignments)}")
+        if perturbation_settings.present_row_prob > 0.0:
+            print(f"  train_perturb : {_planner_perturbation_summary(train_frame)}")
     print(f"  train_file    : {train_path}")
     print(f"  val_file      : {val_path}")
     return 0
