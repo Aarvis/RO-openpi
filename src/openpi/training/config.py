@@ -2672,9 +2672,9 @@ _CONFIGS = [
         data=OrigamiCompActionChunkDataConfig(
             repo_id="local/origami_comp_action_chunk",
             assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk"),
-            dataset_root="E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset",
+            dataset_root="/home/ubuntu/RO-competition-paper-dataset",
             manifest_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/home/ubuntu/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             prompt="fold paper into airplane",
@@ -2683,7 +2683,7 @@ _CONFIGS = [
             tactile_filename="tactile_60d.npy",
             dataset_backend="video",
             shard_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/home/ubuntu/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             shard_manifest_name="shard_manifest.json",
@@ -2725,7 +2725,7 @@ _CONFIGS = [
                 frame_stride=1,
                 keep_horizon_clipped=False,
                 planner_export_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/home/ubuntu/RO-competition-paper-dataset/"
                     "metadata/checkpoint_planner_vla_rollout_exports/"
                     "no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
                 ),
@@ -2757,8 +2757,8 @@ _CONFIGS = [
                 speed_final_unpaired_policy="keep",
                 speed_done_policy="neutral",
                 speed_alpha=2.2,
-                speed_min_weight=0.7,
-                speed_max_weight=1.3,
+                speed_min_weight=1.0,
+                speed_max_weight=1.0,
                 speed_epsilon_frames=1.0e-6,
                 speed_weight_val=False,
                 train_index_name="train_index.parquet",
@@ -2766,7 +2766,7 @@ _CONFIGS = [
             ),
             shard_build=OrigamiCompActionChunkShardBuildConfig(
                 shard_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/home/ubuntu/RO-competition-paper-dataset/"
                     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
                 ),
                 split="train",
@@ -2808,7 +2808,7 @@ _CONFIGS = [
                 ),
                 weight_loaders.NpzSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "/home/ubuntu/RO-competition-paper-dataset/"
                         "metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/"
                         "openpi_origami_planner_adapter_prefixed_params.npz"
                     ),
@@ -2816,7 +2816,7 @@ _CONFIGS = [
                 ),
                 weight_loaders.OrbaxSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "/home/ubuntu/RO-competition-paper-dataset/"
                         "metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
                     ),
                     key_prefix="origami_ftp_tactile_prefix_encoder",
@@ -2911,15 +2911,15 @@ _ORIGAMI_COMP_ACTION_CHUNK_CONFIG = next(
 )
 
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE2_MANIFEST_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/ubuntu/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner_phase2_f25_f30_raw"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE2_SHARD_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/ubuntu/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner_phase2_f25_f30_raw"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE2_EXPORT_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/ubuntu/RO-competition-paper-dataset/"
     "metadata/checkpoint_planner_vla_rollout_exports/"
     "no_hmm_224_headleft_tactile_distill_unseen_F25_F30_F50"
 )
@@ -2933,22 +2933,22 @@ _CONFIGS.append(
         # the Phase 2 manifest and shards.
         model=dataclasses.replace(
             _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model,
-            action_horizon=25,
+            action_horizon=15,
         ),
         data=dataclasses.replace(
             _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data,
             manifest_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_MANIFEST_ROOT,
             # Phase 2 consumes rebuilt immutable shards, not the Phase 1 rows.
-            dataset_backend="shard",
+            dataset_backend="video",
             shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_SHARD_ROOT,
             planner_branch="posterior",
             planner_value_variant="raw",
-            action_chunk_stride=1,
+            action_chunk_stride=2,
             manifest_build=dataclasses.replace(
                 _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.manifest_build,
                 planner_export_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE2_EXPORT_ROOT,
-                train_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
-                val_planner_view_modes=("frame_stride_25", "frame_stride_30", "random_mix"),
+                train_planner_view_modes=("frame_stride_30", "random_mix"),
+                val_planner_view_modes=("frame_stride_30", "random_mix"),
                 planner_value_variant="raw",
                 # Target over every dataset episode. Coverage-forced partial
                 # episodes count toward this total; the builder samples only
@@ -2968,7 +2968,7 @@ _CONFIGS.append(
                 ),
                 planner_speed_stratified_assignment=True,
                 planner_speed_stratification_bins=10,
-                planner_perturb_present_row_prob=0.27,
+                planner_perturb_present_row_prob=0.2,
                 planner_perturb_offset_probs={-2: 0.05, -1: 0.30, 1: 0.50, 2: 0.15},
                 planner_perturb_previous_tail_fraction=0.30,
                 planner_perturb_next_head_fraction=0.30,
@@ -2976,9 +2976,8 @@ _CONFIGS.append(
                 planner_perturb_next_two_head_fraction=0.10,
                 planner_perturb_seed=5678,
                 planner_view_mode_probs={
-                    "frame_stride_25": 1.0 / 3.0,
-                    "frame_stride_30": 1.0 / 3.0,
-                    "random_mix": 1.0 / 3.0,
+                    "frame_stride_30": 0.65,
+                    "random_mix": 0.35,
                 },
                 planner_branch_probs={"posterior": 0.5, "prior": 0.5},
             ),
@@ -2994,32 +2993,33 @@ _CONFIGS.append(
         weight_loader=weight_loaders.CheckpointWeightLoader(
             # Replace the experiment and step components with the completed
             # Phase 1 run. This must be the checkpoint's `params` directory.
-            "E:/Robot-Origami-Challenge/openpi/checkpoints/pi05_origami_comp_action_chunk/"
-            "REPLACE_WITH_PHASE1_EXPERIMENT/REPLACE_WITH_PHASE1_STEP/params"
+            "/home/ubuntu/RO-openpi/DUME-NO-PLANNER-100-COMP-ACTION-CHUNK/DUME-NO-PLANNER-100-COMP-ACTION-CHUNK/params"
         ),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=200,
-            peak_lr=1e-5,
-            decay_steps=60_000,
+            warmup_steps=500,
+            peak_lr=4e-5,
+            decay_steps=43_250,
             decay_lr=1e-6,
         ),
         # Intentionally explicit Phase 2 controls. Adjust these here without
         # changing the original Phase 1 recipe.
-        batch_size=32,
-        num_workers=8,
-        num_train_steps=60_000,
+        batch_size=64,
+        num_workers=48,
+        num_train_steps=43_250,
         checkpoint_strategy="manual",
-        save_steps=(1_000, 2_000, 3_000, 5_000, 10_000, 20_000, 40_000, 60_000),
-        max_to_keep=10,
+        save_steps=(1000, 10_000, 22_000, 35_000),
+        # save_interval=5_000,
+        # keep_period=10_000,
+        max_to_keep=20,
     )
 )
 
 _ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/ubuntu/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_spline/no_hmm_224_headleft_tactile_prompt_planner"
 )
 _ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/ubuntu/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_spline_shards/no_hmm_224_headleft_tactile_prompt_planner"
 )
 _CONFIGS.append(
