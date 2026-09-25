@@ -546,11 +546,13 @@ def main() -> int:
     # per worker plus one overall completed-shards bar.
     with context.Manager() as manager:
         progress_queue = manager.Queue()
+        total_episodes = sum(len(task["episodes"]) for task in tasks)
+        overall_bar = tqdm(total=len(tasks), desc="Build Phase-3 shards", unit="shard", position=0, leave=True)
+        episode_bar = tqdm(total=total_episodes, desc="Build Phase-3 episodes", unit="episode", position=1, leave=True)
         worker_bars = [
-            tqdm(total=1, desc=f"Worker {slot + 1}: idle", unit="frame", position=slot + 1, leave=True)
+            tqdm(total=1, desc=f"Worker {slot + 1}: idle", unit="frame", position=slot + 2, leave=True)
             for slot in range(workers)
         ]
-        overall_bar = tqdm(total=len(tasks), desc="Build Phase-3 shards", unit="shard", position=0, leave=True)
         slot_by_pid: dict[int, int] = {}
         idle_slots: list[int] = list(range(workers))
         worker_state: dict[int, dict[str, int]] = {}
@@ -564,13 +566,13 @@ def main() -> int:
                     slot = idle_slots.pop(0) if idle_slots else len(slot_by_pid) % workers
                     slot_by_pid[pid] = slot
                 total_frames = int(event["total_frames"])
-                total_episodes = int(event["total_episodes"])
+                shard_total_episodes = int(event["total_episodes"])
                 shard_id = int(event["shard_id"])
                 bar = worker_bars[slot]
                 bar.reset(total=total_frames)
                 bar.set_description_str(f"Worker {slot + 1}: shard {shard_id:05d}")
-                worker_state[pid] = {"episodes": 0, "total_episodes": total_episodes}
-                bar.set_postfix_str(f"episodes 0/{total_episodes}", refresh=True)
+                worker_state[pid] = {"episodes": 0, "total_episodes": shard_total_episodes}
+                bar.set_postfix_str(f"episodes 0/{shard_total_episodes}", refresh=True)
                 return
             slot = slot_by_pid.get(pid)
             if slot is None:
@@ -580,7 +582,10 @@ def main() -> int:
             if kind == "frames":
                 bar.update(int(event.get("frames", 0)))
             elif kind == "episodes" and state is not None:
-                state["episodes"] += int(event.get("episodes", 0))
+                completed_episodes = int(event.get("episodes", 0))
+                state["episodes"] += completed_episodes
+                episode_bar.update(completed_episodes)
+                episode_bar.set_postfix_str(f"completed {episode_bar.n}/{total_episodes}", refresh=True)
                 bar.set_postfix_str(f"episodes {state['episodes']}/{state['total_episodes']}", refresh=True)
             elif kind == "complete":
                 if state is not None:
@@ -626,6 +631,7 @@ def main() -> int:
         finally:
             for bar in worker_bars:
                 bar.close()
+            episode_bar.close()
             overall_bar.close()
     manifest = json.loads((shard_root / _phase3.SHARD_MANIFEST_FILENAME).read_text(encoding="utf-8"))
     for entry in manifest["shards"]:
