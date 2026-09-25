@@ -11,7 +11,9 @@ from concurrent import futures
 import dataclasses
 import json
 import multiprocessing
+import os
 from pathlib import Path
+import queue
 import shutil
 import sys
 import traceback
@@ -42,6 +44,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-shard-bytes", type=str, default=None)
     parser.add_argument("--max-episodes-per-shard", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--progress-update-frames",
+        type=int,
+        default=None,
+        help="Send a live worker-progress update after this many decoded frames (default: config value, 256).",
+    )
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument("--start-shard", type=int, default=0)
     parser.add_argument("--max-shards", type=int, default=None)
@@ -63,7 +71,15 @@ def _resolve(args: argparse.Namespace):
     if shard_root is None:
         raise ValueError("Set shard_root in config or pass --shard-root.")
     changes: dict[str, Any] = {"shard_root": str(shard_root)}
-    for attr in ("split", "num_workers", "target_shard_bytes", "max_episodes_per_shard", "seed", "overwrite"):
+    for attr in (
+        "split",
+        "num_workers",
+        "target_shard_bytes",
+        "max_episodes_per_shard",
+        "seed",
+        "progress_update_frames",
+        "overwrite",
+    ):
         value = getattr(args, attr)
         if value is not None:
             changes[attr] = value
@@ -192,12 +208,28 @@ def _marker(path: Path, payload: dict[str, Any]) -> None:
     _phase3.atomic_write_json(path, payload)
 
 
+def _emit_progress(progress_queue: Any | None, **event: Any) -> None:
+    """Best-effort worker-to-parent progress reporting.
+
+    Shard writing must not fail merely because the parent renderer exits or a
+    terminal cannot consume a cosmetic progress update.
+    """
+    if progress_queue is None:
+        return
+    try:
+        progress_queue.put_nowait(event)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _write_episode(
     *,
     episode_rows: pd.DataFrame,
     arrays: dict[str, np.ndarray],
     settings: Any,
     build: Any,
+    progress_queue: Any | None = None,
+    shard_id: int | None = None,
 ) -> None:
     episode_uid = str(episode_rows["episode_uid"].iloc[0])
     episode_root = Path(settings.dataset_root) / "episodes" / episode_uid
@@ -209,6 +241,21 @@ def _write_episode(
     frame_index = _chunk._read_frame_index(arrays_root, state.shape[0])
     readers: dict[str, _chunk.SequentialVideoReader] = {}
     deform_reader = raw_reader = None
+    update_every = max(1, int(build.progress_update_frames))
+    pending_progress_frames = 0
+
+    def report_frames(*, force: bool = False) -> None:
+        nonlocal pending_progress_frames
+        if pending_progress_frames and (force or pending_progress_frames >= update_every):
+            _emit_progress(
+                progress_queue,
+                kind="frames",
+                pid=os.getpid(),
+                shard_id=shard_id,
+                frames=int(pending_progress_frames),
+            )
+            pending_progress_frames = 0
+
     try:
         for image_key, relpath in settings.image_modalities.items():
             readers[image_key] = _chunk.SequentialVideoReader(episode_root / relpath)
@@ -258,7 +305,10 @@ def _write_episode(
                 # (episode, frame, stride, occurrence), not per physical row.
                 arrays["tactile_raw_images"][physical] = raw
                 arrays["tactile_raw_available"][physical] = raw_available
+            pending_progress_frames += 1
+            report_frames()
     finally:
+        report_frames(force=True)
         for reader in readers.values():
             reader.close()
         if deform_reader is not None:
@@ -268,9 +318,22 @@ def _write_episode(
 
 
 def _build_one(task: dict[str, Any]) -> dict[str, Any]:
+    progress_queue = task.get("progress_queue")
+    shard_id = int(task["shard_id"])
+    total_frames = int(task["num_rows"])
+    total_episodes = len(task["episodes"])
+    _emit_progress(
+        progress_queue,
+        kind="start",
+        pid=os.getpid(),
+        shard_id=shard_id,
+        shard_name=str(task["shard_name"]),
+        total_frames=total_frames,
+        total_episodes=total_episodes,
+    )
     try:
         config, data = _phase3.phase3_config(task["config_name"])
-        build = data.shard_build
+        build = dataclasses.replace(data.shard_build, progress_update_frames=int(task["progress_update_frames"]))
         settings = _chunk.settings_from_data_factory(data, config.model)
         settings = dataclasses.replace(settings, dataset_backend="video", dataset_root=task["dataset_root"])
         shard_root = Path(task["shard_root"])
@@ -279,6 +342,21 @@ def _build_one(task: dict[str, Any]) -> dict[str, Any]:
         incomplete = shard_root / split / f"{name}.incomplete"
         final_marker = final_dir / _phase3.COMPLETE_MARKER
         if final_marker.exists() and not bool(task["overwrite"]):
+            _emit_progress(
+                progress_queue,
+                kind="frames",
+                pid=os.getpid(),
+                shard_id=shard_id,
+                frames=total_frames,
+            )
+            _emit_progress(
+                progress_queue,
+                kind="episodes",
+                pid=os.getpid(),
+                shard_id=shard_id,
+                episodes=total_episodes,
+            )
+            _emit_progress(progress_queue, kind="complete", pid=os.getpid(), shard_id=shard_id)
             return {"status": "skipped", "shard_id": task["shard_id"], "shard_name": name}
         if bool(task["overwrite"]):
             # --overwrite is an explicit request to discard this exact shard,
@@ -337,8 +415,29 @@ def _build_one(task: dict[str, Any]) -> dict[str, Any]:
                     or int(marker.get("rows", -1)) != int(len(group))
                 ):
                     raise RuntimeError(f"Refusing an invalid episode completion marker: {done}")
+                _emit_progress(
+                    progress_queue,
+                    kind="frames",
+                    pid=os.getpid(),
+                    shard_id=shard_id,
+                    frames=int(len(group)),
+                )
+                _emit_progress(
+                    progress_queue,
+                    kind="episodes",
+                    pid=os.getpid(),
+                    shard_id=shard_id,
+                    episodes=1,
+                )
                 continue
-            _write_episode(episode_rows=group, arrays=arrays, settings=settings, build=build)
+            _write_episode(
+                episode_rows=group,
+                arrays=arrays,
+                settings=settings,
+                build=build,
+                progress_queue=progress_queue,
+                shard_id=shard_id,
+            )
             _phase3.flush_memmaps(arrays)
             _marker(done, {"episode_uid": str(episode_uid), "rows": int(len(group)), "fingerprint": fingerprint})
             state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -346,6 +445,13 @@ def _build_one(task: dict[str, Any]) -> dict[str, Any]:
             completed.append(str(episode_uid))
             state["complete_episodes"] = completed
             _marker(state_path, state)
+            _emit_progress(
+                progress_queue,
+                kind="episodes",
+                pid=os.getpid(),
+                shard_id=shard_id,
+                episodes=1,
+            )
         plan, plan_metadata = _phase3.build_virtual_plan(rows, build.mixed_speed, shard_id=int(task["shard_id"]))
         plan_path = arrays_dir / build.virtual_sample_plan_name
         plan_array = _chunk.create_memmap(plan_path, dtype=np.uint32, shape=plan.shape)
@@ -376,8 +482,10 @@ def _build_one(task: dict[str, Any]) -> dict[str, Any]:
         (incomplete / _phase3.COMPLETE_MARKER).write_text("complete\n", encoding="utf-8")
         final_dir.parent.mkdir(parents=True, exist_ok=True)
         incomplete.replace(final_dir)
+        _emit_progress(progress_queue, kind="complete", pid=os.getpid(), shard_id=shard_id)
         return {"status": "built", "shard_id": task["shard_id"], "shard_name": name, "rows": len(rows)}
     except Exception as exc:  # noqa: BLE001
+        _emit_progress(progress_queue, kind="failed", pid=os.getpid(), shard_id=shard_id)
         return {"status": "failed", "shard_id": task["shard_id"], "shard_name": task["shard_name"], "error": str(exc), "traceback": traceback.format_exc()}
 
 
@@ -406,7 +514,17 @@ def main() -> int:
                 }
             )
             if task["shard_id"] >= args.start_shard and (args.max_shards is None or len(tasks) < args.max_shards):
-                tasks.append({**task, "config_name": args.config_name, "dataset_root": str(settings.dataset_root), "shard_root": str(shard_root), "split": split, "overwrite": bool(build.overwrite)})
+                tasks.append(
+                    {
+                        **task,
+                        "config_name": args.config_name,
+                        "dataset_root": str(settings.dataset_root),
+                        "shard_root": str(shard_root),
+                        "split": split,
+                        "overwrite": bool(build.overwrite),
+                        "progress_update_frames": int(build.progress_update_frames),
+                    }
+                )
     root_metadata = {
         "format": _phase3.FORMAT_VERSION,
         "config_name": args.config_name,
@@ -423,13 +541,92 @@ def main() -> int:
     workers = min(max(1, int(build.num_workers)), max(1, len(tasks)))
     context = multiprocessing.get_context("spawn")
     failures: list[dict[str, Any]] = []
-    with futures.ProcessPoolExecutor(max_workers=workers, mp_context=context) as executor:
-        futures_by_task = {executor.submit(_build_one, task): task for task in tasks}
-        for future in tqdm(futures.as_completed(futures_by_task), total=len(futures_by_task), desc="Build Phase-3 shards", unit="shard"):
-            result = future.result()
-            print(f"{result['status']}: {result['shard_name']}")
-            if result["status"] == "failed":
-                failures.append(result)
+    # The parent owns all terminal rendering. Each active process reports
+    # small frame deltas through a manager queue, giving one stable live bar
+    # per worker plus one overall completed-shards bar.
+    with context.Manager() as manager:
+        progress_queue = manager.Queue()
+        worker_bars = [
+            tqdm(total=1, desc=f"Worker {slot + 1}: idle", unit="frame", position=slot + 1, leave=True)
+            for slot in range(workers)
+        ]
+        overall_bar = tqdm(total=len(tasks), desc="Build Phase-3 shards", unit="shard", position=0, leave=True)
+        slot_by_pid: dict[int, int] = {}
+        idle_slots: list[int] = list(range(workers))
+        worker_state: dict[int, dict[str, int]] = {}
+
+        def render(event: dict[str, Any]) -> None:
+            pid = int(event.get("pid", -1))
+            kind = str(event.get("kind", ""))
+            if kind == "start":
+                slot = slot_by_pid.get(pid)
+                if slot is None:
+                    slot = idle_slots.pop(0) if idle_slots else len(slot_by_pid) % workers
+                    slot_by_pid[pid] = slot
+                total_frames = int(event["total_frames"])
+                total_episodes = int(event["total_episodes"])
+                shard_id = int(event["shard_id"])
+                bar = worker_bars[slot]
+                bar.reset(total=total_frames)
+                bar.set_description_str(f"Worker {slot + 1}: shard {shard_id:05d}")
+                worker_state[pid] = {"episodes": 0, "total_episodes": total_episodes}
+                bar.set_postfix_str(f"episodes 0/{total_episodes}", refresh=True)
+                return
+            slot = slot_by_pid.get(pid)
+            if slot is None:
+                return
+            bar = worker_bars[slot]
+            state = worker_state.get(pid)
+            if kind == "frames":
+                bar.update(int(event.get("frames", 0)))
+            elif kind == "episodes" and state is not None:
+                state["episodes"] += int(event.get("episodes", 0))
+                bar.set_postfix_str(f"episodes {state['episodes']}/{state['total_episodes']}", refresh=True)
+            elif kind == "complete":
+                if state is not None:
+                    bar.n = bar.total or bar.n
+                    bar.set_postfix_str(
+                        f"episodes {state['episodes']}/{state['total_episodes']} (complete)",
+                        refresh=True,
+                    )
+            elif kind == "failed":
+                if state is not None:
+                    bar.set_postfix_str(
+                        f"episodes {state['episodes']}/{state['total_episodes']} (failed)",
+                        refresh=True,
+                    )
+
+        def drain_progress() -> None:
+            while True:
+                try:
+                    event = progress_queue.get_nowait()
+                except queue.Empty:
+                    return
+                render(event)
+
+        try:
+            with futures.ProcessPoolExecutor(max_workers=workers, mp_context=context) as executor:
+                futures_by_task = {
+                    executor.submit(_build_one, {**task, "progress_queue": progress_queue}): task for task in tasks
+                }
+                pending = set(futures_by_task)
+                completed = 0
+                while pending:
+                    drain_progress()
+                    done, pending = futures.wait(pending, timeout=0.25, return_when=futures.FIRST_COMPLETED)
+                    for future in done:
+                        result = future.result()
+                        completed += 1
+                        overall_bar.update(1)
+                        overall_bar.set_postfix_str(f"completed {completed}/{len(tasks)}", refresh=True)
+                        tqdm.write(f"{result['status']}: {result['shard_name']}")
+                        if result["status"] == "failed":
+                            failures.append(result)
+                drain_progress()
+        finally:
+            for bar in worker_bars:
+                bar.close()
+            overall_bar.close()
     manifest = json.loads((shard_root / _phase3.SHARD_MANIFEST_FILENAME).read_text(encoding="utf-8"))
     for entry in manifest["shards"]:
         entry["complete"] = (shard_root / entry["relative_dir"] / _phase3.COMPLETE_MARKER).is_file()
