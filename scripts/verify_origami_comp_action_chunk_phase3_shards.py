@@ -145,7 +145,15 @@ def main() -> int:
                 expected_plan, expected_info = _phase3.build_virtual_plan(
                     rows, build.mixed_speed, shard_id=int(metadata.get("shard_id", entry["shard_id"]))
                 )
-                if _phase3.canonical_json(plan_info) != _phase3.canonical_json(expected_info):
+                expected_plan_filename = f"arrays/{build.virtual_sample_plan_name}"
+                if plan_info.get("filename") != expected_plan_filename:
+                    failures.append(f"{directory}: unexpected virtual-plan filename")
+                # ``filename`` is storage location, not coverage metadata;
+                # compare it above and compare only the deterministic plan
+                # fields here. Comparing the full object would make every
+                # valid shard fail because build_virtual_plan has no filename.
+                actual_coverage_info = {key: plan_info.get(key) for key in expected_info}
+                if _phase3.canonical_json(actual_coverage_info) != _phase3.canonical_json(expected_info):
                     failures.append(f"{directory}: virtual-plan coverage metadata differs from config")
                 if args.mode == "full" and not np.array_equal(plan, expected_plan):
                     failures.append(f"{directory}: virtual plan differs from deterministic expected plan")
