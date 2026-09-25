@@ -16,6 +16,7 @@ import openpi.models.model as _model
 import openpi.training.config as _config
 import openpi.training.future_latent_sidecar as _future_latent_sidecar
 import openpi.training.origami_comp_action_chunk_shards as _origami_comp_action_chunk_shards
+import openpi.training.origami_comp_action_chunk_phase3_dataset as _origami_comp_action_chunk_phase3_dataset
 import openpi.training.origami_comp_action_spline_shards as _origami_comp_action_spline_shards
 import openpi.training.origami_vla_dataset as _origami_vla_dataset
 import openpi.training.robot_spline_sidecar as _robot_spline_sidecar
@@ -164,6 +165,10 @@ def create_torch_dataset(
     """Create a dataset for training."""
     if data_config.origami_vla is not None:
         if data_config.origami_vla.dataset_backend == "shard":
+            if data_config.origami_vla.phase3_mixed_speed_enabled:
+                return _origami_comp_action_chunk_phase3_dataset.OrigamiCompActionChunkPhase3Dataset(
+                    data_config.origami_vla, split=data_config.dataset_split
+                )
             if data_config.origami_vla.action_source == "spline":
                 return _origami_comp_action_spline_shards.OrigamiCompActionSplineShardDataset(
                     data_config.origami_vla, split=data_config.dataset_split

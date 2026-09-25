@@ -60,6 +60,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--action-horizon", type=int, default=10)
     parser.add_argument("--action-chunk-stride", type=int, default=1)
     parser.add_argument(
+        "--common-horizon-max-stride",
+        type=int,
+        default=1,
+        help=(
+            "Require every retained start to support this maximum action stride. "
+            "For Phase 3 H25/S1..S5 use 5; this removes all incomplete horizons "
+            "and therefore eliminates action-mask storage."
+        ),
+    )
+    parser.add_argument(
+        "--force-planner-disabled",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Attach planner_enabled=false rows even when no planner export root is configured.",
+    )
+    parser.add_argument(
         "--keep-horizon-clipped",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -309,6 +325,14 @@ def _resolve_args_from_config(args: argparse.Namespace) -> argparse.Namespace:
     set_if_config("frame_stride", int(build_config.frame_stride), "--frame-stride")
     set_if_config("action_horizon", int(config.model.action_horizon), "--action-horizon")
     set_if_config("action_chunk_stride", int(data_config.action_chunk_stride), "--action-chunk-stride")
+    phase3_build = data_config.shard_build
+    if isinstance(phase3_build, train_config.OrigamiCompActionChunkPhase3ShardBuildConfig):
+        set_if_config(
+            "common_horizon_max_stride",
+            max(phase3_build.mixed_speed.ordered_strides),
+            "--common-horizon-max-stride",
+        )
+        set_if_config("force_planner_disabled", True, "--force-planner-disabled", "--no-force-planner-disabled")
     set_if_config(
         "keep_horizon_clipped",
         bool(build_config.keep_horizon_clipped),
@@ -1523,7 +1547,9 @@ def _build_split_frame(
     frame_stride: int,
     action_horizon: int,
     action_chunk_stride: int,
+    common_horizon_max_stride: int,
     drop_horizon_clipped: bool,
+    force_planner_disabled: bool,
     planner_export_root: Path | None,
     planner_view_modes: list[str],
     planner_branch: str,
@@ -1568,7 +1594,10 @@ def _build_split_frame(
         tactile_len = int(np.load(tactile_path, mmap_mode="r").shape[0])
         num_frames = min(metadata_num_frames, state_len, tactile_len)
         if drop_horizon_clipped:
-            max_start = min(num_frames, action_len - (action_horizon - 1) * action_chunk_stride)
+            max_start = min(
+                num_frames,
+                action_len - (action_horizon - 1) * action_chunk_stride * common_horizon_max_stride,
+            )
             frame_positions = np.arange(max(0, max_start), dtype=np.int64)
         else:
             frame_positions = np.arange(num_frames, dtype=np.int64)
@@ -1605,12 +1634,13 @@ def _build_split_frame(
                 "action_horizon": np.full(frame_positions.shape[0], action_horizon, dtype=np.int64),
                 "action_chunk_stride": np.full(frame_positions.shape[0], action_chunk_stride, dtype=np.int64),
                 "horizon_clipped_to_episode_end": (
-                    frame_positions + (action_horizon - 1) * action_chunk_stride >= action_len
+                    frame_positions + (action_horizon - 1) * action_chunk_stride * common_horizon_max_stride
+                    >= action_len
                 ),
             }
         )
         if planner_export_root is None:
-            rows.append(base_frame)
+            rows.append(_attach_disabled_planner_rows(base_frame) if force_planner_disabled else base_frame)
             continue
         if planner_assignments is not None:
             assignment = planner_assignments.get(episode_uid)
@@ -1667,6 +1697,8 @@ def main() -> int:
         raise ValueError("--action-horizon must be positive.")
     if args.action_chunk_stride <= 0:
         raise ValueError("--action-chunk-stride must be positive.")
+    if args.common_horizon_max_stride <= 0:
+        raise ValueError("--common-horizon-max-stride must be positive.")
 
     dataset_root = Path(args.dataset_root)
     output_root = Path(args.output_root)
@@ -1786,7 +1818,9 @@ def main() -> int:
         frame_stride=int(args.frame_stride),
         action_horizon=int(args.action_horizon),
         action_chunk_stride=int(args.action_chunk_stride),
+        common_horizon_max_stride=int(args.common_horizon_max_stride),
         drop_horizon_clipped=drop_horizon_clipped,
+        force_planner_disabled=bool(args.force_planner_disabled),
         planner_export_root=planner_export_root,
         planner_view_modes=train_planner_view_modes,
         planner_branch=str(args.planner_branch),
@@ -1808,7 +1842,9 @@ def main() -> int:
         frame_stride=int(args.frame_stride),
         action_horizon=int(args.action_horizon),
         action_chunk_stride=int(args.action_chunk_stride),
+        common_horizon_max_stride=int(args.common_horizon_max_stride),
         drop_horizon_clipped=drop_horizon_clipped,
+        force_planner_disabled=bool(args.force_planner_disabled),
         planner_export_root=planner_export_root,
         planner_view_modes=val_planner_view_modes,
         planner_branch=str(args.planner_branch),
@@ -1858,6 +1894,7 @@ def main() -> int:
         "frame_stride": int(args.frame_stride),
         "action_horizon": int(args.action_horizon),
         "action_chunk_stride": int(args.action_chunk_stride),
+        "common_horizon_max_stride": int(args.common_horizon_max_stride),
         "drop_horizon_clipped": drop_horizon_clipped,
         "planner": {
             "enabled": planner_export_root is not None,

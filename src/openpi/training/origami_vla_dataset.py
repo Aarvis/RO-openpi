@@ -51,6 +51,12 @@ class OrigamiVlaSettings:
     shard_require_complete: bool = True
     shard_max_cached_shards: int = 2
     shard_use_stored_row_order: bool = True
+    # Phase 3 reads a compact logical sample plan from each completed shard.
+    # These explicit settings prevent accidental format detection by pathname.
+    phase3_mixed_speed_enabled: bool = False
+    phase3_shard_format: str | None = None
+    phase3_virtual_plan_filename: str = "virtual_sample_plan.npy"
+    phase3_prompt_template: str = "Fold paper into airplane. Speed: {speed}x."
     image_source_type: Literal["video", "frame_cache"] = "video"
     image_modalities: dict[str, str] = dataclasses.field(
         default_factory=lambda: {
@@ -145,6 +151,17 @@ class OrigamiVlaSettings:
             raise ValueError(f"shard_max_cached_shards must be positive, got {self.shard_max_cached_shards}")
         if self.dataset_backend == "shard" and not self.shard_root:
             raise ValueError("dataset_backend='shard' requires shard_root to be set.")
+        if self.phase3_mixed_speed_enabled:
+            if self.dataset_backend != "shard":
+                raise ValueError("Phase-3 mixed-speed loading requires dataset_backend='shard'.")
+            if not self.phase3_shard_format:
+                raise ValueError("Phase-3 mixed-speed loading requires phase3_shard_format.")
+            try:
+                rendered = self.phase3_prompt_template.format(speed=1)
+            except (IndexError, KeyError, ValueError) as exc:
+                raise ValueError("phase3_prompt_template must be a valid format string containing {speed}.") from exc
+            if "{speed}" not in self.phase3_prompt_template or not rendered.strip():
+                raise ValueError("phase3_prompt_template must contain {speed} and render non-empty text.")
 
 
 def _ensure_path(value: str | Path) -> Path:

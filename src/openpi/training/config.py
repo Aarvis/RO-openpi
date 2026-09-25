@@ -306,6 +306,10 @@ class OrigamiVlaDataConfig(DataConfigFactory):
     shard_require_complete: bool = True
     shard_max_cached_shards: int = 2
     shard_use_stored_row_order: bool = True
+    phase3_mixed_speed_enabled: bool = False
+    phase3_shard_format: str | None = None
+    phase3_virtual_plan_filename: str = "virtual_sample_plan.npy"
+    phase3_prompt_template: str = "Fold paper into airplane. Speed: {speed}x."
     sample_weight_column: str = "sample_weight"
     require_sample_weight: bool = False
     image_source_type: Literal["video", "frame_cache"] = "video"
@@ -393,6 +397,10 @@ class OrigamiVlaDataConfig(DataConfigFactory):
             shard_require_complete=self.shard_require_complete,
             shard_max_cached_shards=self.shard_max_cached_shards,
             shard_use_stored_row_order=self.shard_use_stored_row_order,
+            phase3_mixed_speed_enabled=self.phase3_mixed_speed_enabled,
+            phase3_shard_format=self.phase3_shard_format,
+            phase3_virtual_plan_filename=self.phase3_virtual_plan_filename,
+            phase3_prompt_template=self.phase3_prompt_template,
             max_control_points=model_config.origami_vla.max_control_points,
             action_horizon=model_config.action_horizon,
             max_span_count=model_config.origami_vla.max_span_count,
@@ -542,9 +550,9 @@ class OrigamiMixedSpeedShardConfig:
     ``stride_episode_coverage`` maps an action stride to its requested number
     of episode-equivalents.  For example, ``{1: 1.5, 2: 1.0}`` means every
     episode is represented once at stride 1 plus one additional half-episode
-    equivalent, while stride 2 receives one episode-equivalent.  The future
-    Phase-3 builder, shard verifier, norm-stats tool, and loader must consume
-    this one definition rather than independently recreating the mixture.
+    equivalent, while stride 2 receives one episode-equivalent. The Phase-3
+    builder, shard verifier, norm-stats tool, and loader consume this one
+    definition rather than independently recreating the mixture.
     """
 
     action_horizon: int = 25
@@ -608,8 +616,7 @@ class OrigamiCompActionChunkPhase3ShardBuildConfig(OrigamiCompActionChunkShardBu
     """Phase-3-only build controls for resumable mixed-speed shards.
 
     This format is intentionally separate from the existing Phase-1/2 shard
-    format. The dedicated builder will be added in the next implementation
-    increment; these fields establish its stable configuration contract now.
+    format. Its dedicated builder consumes these fields directly.
     """
 
     mixed_speed: OrigamiMixedSpeedShardConfig = dataclasses.field(default_factory=OrigamiMixedSpeedShardConfig)
@@ -3251,10 +3258,14 @@ _CONFIGS.append(
         data=dataclasses.replace(
             _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_BUILD_DATA,
             # This config is deliberately shard-only. Its dataset_root and
-            # manifest_root remain provenance/build settings but are not read
-            # by the future Phase-3 shard backend during training.
+            # manifest_root remain provenance/build settings and must not be
+            # read by the later Phase-3 shard backend during training.
             dataset_backend="shard",
             shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT,
+            phase3_mixed_speed_enabled=True,
+            phase3_shard_format="origami_comp_action_chunk_phase3_mixed_speed_v2",
+            phase3_virtual_plan_filename="virtual_sample_plan.npy",
+            phase3_prompt_template="Fold paper into airplane. Speed: {speed}x.",
         ),
         # 350k is the default for 4.0 logical dataset-equivalents at global
         # batch size 32. Remote runs must set both batch_size and train steps
