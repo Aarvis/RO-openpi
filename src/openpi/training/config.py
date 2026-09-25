@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol, TypeAlias
 
 import etils.epath as epath
 import flax.nnx as nnx
+import numpy as np
 from typing_extensions import override
 import tyro
 
@@ -532,6 +533,104 @@ class OrigamiCompActionChunkShardBuildConfig:
     progress_max_active_bars: int = 8
     progress_poll_seconds: float = 0.25
     progress_leave_active_bars: bool = False
+
+
+@dataclasses.dataclass(frozen=True)
+class OrigamiMixedSpeedShardConfig:
+    """Immutable Phase-3 mixed-speed dataset contract.
+
+    ``stride_episode_coverage`` maps an action stride to its requested number
+    of episode-equivalents.  For example, ``{1: 1.5, 2: 1.0}`` means every
+    episode is represented once at stride 1 plus one additional half-episode
+    equivalent, while stride 2 receives one episode-equivalent.  The future
+    Phase-3 builder, shard verifier, norm-stats tool, and loader must consume
+    this one definition rather than independently recreating the mixture.
+    """
+
+    action_horizon: int = 25
+    stride_episode_coverage: dict[int, float] = dataclasses.field(
+        default_factory=lambda: {1: 1.50, 2: 1.00, 3: 0.75, 4: 0.50, 5: 0.25}
+    )
+    episode_sampling_mode: Literal["episode_balanced"] = "episode_balanced"
+    seed: int = 1234
+    prompt_template: str = "Fold paper into airplane. Speed: {speed}x."
+    # Retain only starts that can form a complete horizon at every configured
+    # stride. This lets Phase 3 omit action-mask arrays entirely.
+    require_common_full_horizon: bool = True
+
+    def __post_init__(self) -> None:
+        if self.action_horizon <= 0:
+            raise ValueError(f"action_horizon must be positive, got {self.action_horizon}")
+        if self.episode_sampling_mode != "episode_balanced":
+            raise ValueError(
+                "Phase-3 mixed-speed shards currently support only "
+                f"episode_balanced sampling, got {self.episode_sampling_mode!r}."
+            )
+        if not self.stride_episode_coverage:
+            raise ValueError("stride_episode_coverage must contain at least one stride.")
+        invalid_strides = [stride for stride in self.stride_episode_coverage if int(stride) <= 0]
+        if invalid_strides:
+            raise ValueError(f"All mixed-speed strides must be positive, got {invalid_strides}.")
+        invalid_coverage = {
+            int(stride): float(coverage)
+            for stride, coverage in self.stride_episode_coverage.items()
+            if not np.isfinite(float(coverage)) or float(coverage) < 0.0
+        }
+        if invalid_coverage:
+            raise ValueError(
+                "Mixed-speed episode coverage must be finite and non-negative, "
+                f"got {invalid_coverage}."
+            )
+        if not any(float(coverage) > 0.0 for coverage in self.stride_episode_coverage.values()):
+            raise ValueError("At least one mixed-speed episode coverage value must be positive.")
+        try:
+            rendered_prompt = self.prompt_template.format(speed=1)
+        except (IndexError, KeyError, ValueError) as exc:
+            raise ValueError(
+                "prompt_template must be a valid format string containing the {speed} placeholder."
+            ) from exc
+        if "{speed}" not in self.prompt_template or not rendered_prompt.strip():
+            raise ValueError(
+                "prompt_template must contain {speed} and render a non-empty prompt."
+            )
+
+    @property
+    def ordered_strides(self) -> tuple[int, ...]:
+        return tuple(sorted(int(stride) for stride in self.stride_episode_coverage))
+
+    @property
+    def total_episode_coverage(self) -> float:
+        return float(sum(float(value) for value in self.stride_episode_coverage.values()))
+
+
+@dataclasses.dataclass(frozen=True)
+class OrigamiCompActionChunkPhase3ShardBuildConfig(OrigamiCompActionChunkShardBuildConfig):
+    """Phase-3-only build controls for resumable mixed-speed shards.
+
+    This format is intentionally separate from the existing Phase-1/2 shard
+    format. The dedicated builder will be added in the next implementation
+    increment; these fields establish its stable configuration contract now.
+    """
+
+    mixed_speed: OrigamiMixedSpeedShardConfig = dataclasses.field(default_factory=OrigamiMixedSpeedShardConfig)
+    resume_incomplete_shards: bool = True
+    episode_progress_dir_name: str = "progress"
+    episode_complete_suffix: str = ".done"
+    build_state_name: str = "build_state.json"
+    virtual_sample_plan_name: str = "virtual_sample_plan.npy"
+
+    def __post_init__(self) -> None:
+        if not self.resume_incomplete_shards:
+            raise ValueError("Phase-3 shard builds must keep resume_incomplete_shards enabled.")
+        for field_name in (
+            "episode_progress_dir_name",
+            "episode_complete_suffix",
+            "build_state_name",
+            "virtual_sample_plan_name",
+        ):
+            value = str(getattr(self, field_name)).strip()
+            if not value or "/" in value or "\\" in value:
+                raise ValueError(f"{field_name} must be a simple non-empty file name, got {value!r}.")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -3011,6 +3110,163 @@ _CONFIGS.append(
         checkpoint_strategy="manual",
         save_steps=(1_000, 2_000, 3_000, 5_000, 10_000, 20_000, 40_000, 60_000),
         max_to_keep=10,
+    )
+)
+
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MANIFEST_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/openpi_origami_comp_action_chunk/"
+    "no_hmm_224_headleft_tactile_mixed_speed_phase3"
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT = (
+    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "metadata/openpi_origami_comp_action_chunk_phase3_shards/"
+    "no_hmm_224_headleft_tactile_mixed_speed_h25_s1_s5"
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_CHECKPOINT_PARAMS = (
+    "E:/Robot-Origami-Challenge/openpi/checkpoints/pi05_origami_comp_action_chunk_phase2/"
+    "REPLACE_WITH_PHASE2_EXPERIMENT/REPLACE_WITH_PHASE2_STEP/params"
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MIXED_SPEED = OrigamiMixedSpeedShardConfig(
+    action_horizon=25,
+    stride_episode_coverage={1: 1.50, 2: 1.00, 3: 0.75, 4: 0.50, 5: 0.25},
+    episode_sampling_mode="episode_balanced",
+    seed=1234,
+    prompt_template="Fold paper into airplane. Speed: {speed}x.",
+    require_common_full_horizon=True,
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MODEL = dataclasses.replace(
+    _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model,
+    action_horizon=25,
+    origami_vla=dataclasses.replace(
+        _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.model.origami_vla,
+        # Speed is represented by the Phase-3 text prompt and action target,
+        # never by an execution-duration loss weight.
+        episode_execution_speed_preference=False,
+        use_speed_efficiency_weight=False,
+        normalize_speed_efficiency_weighted_loss=False,
+    ),
+)
+_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_BUILD_DATA = dataclasses.replace(
+    _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data,
+    repo_id="local/origami_comp_action_chunk_phase3",
+    assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk_phase3"),
+    manifest_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MANIFEST_ROOT,
+    # The dedicated Phase-3 builder reads raw source data. The portable
+    # training config below changes this to the shard backend.
+    dataset_backend="video",
+    shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT,
+    prompt="Fold paper into airplane.",
+    action_chunk_stride=1,
+    drop_horizon_clipped=True,
+    include_planner_features=True,
+    require_sample_weight=False,
+    manifest_build=dataclasses.replace(
+        _ORIGAMI_COMP_ACTION_CHUNK_CONFIG.data.manifest_build,
+        # Phase 3 deliberately has no planner export dependency. The model
+        # still receives zero, masked planner-shaped inputs from its shards.
+        planner_export_root=None,
+        train_planner_view_modes=(),
+        val_planner_view_modes=(),
+        planner_dropout_episode_prob=1.0,
+        planner_force_dropout_on_incomplete_episode=False,
+        planner_required_complete_view_modes=(),
+        planner_speed_stratified_assignment=False,
+        planner_perturb_present_row_prob=0.0,
+        speed_weighting=False,
+        speed_weight_val=False,
+    ),
+    shard_build=OrigamiCompActionChunkPhase3ShardBuildConfig(
+        shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT,
+        split="train",
+        target_shard_bytes="128GiB",
+        target_num_shards=None,
+        max_episodes_per_shard=None,
+        num_workers=8,
+        seed=1234,
+        season_column="source_season",
+        row_order="shuffled_index",
+        image_size=224,
+        overwrite=False,
+        skip_existing=True,
+        require_manifest_verified=False,
+        shard_manifest_name="shard_manifest.json",
+        shard_plan_name="shard_plan.parquet",
+        rows_name="rows.parquet",
+        metadata_name="metadata.json",
+        complete_marker_name="complete.marker",
+        max_shards_per_run=None,
+        progress_update_frames=256,
+        progress_max_active_bars=8,
+        progress_poll_seconds=0.25,
+        progress_leave_active_bars=False,
+        mixed_speed=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MIXED_SPEED,
+        resume_incomplete_shards=True,
+        episode_progress_dir_name="progress",
+        episode_complete_suffix=".done",
+        build_state_name="build_state.json",
+        virtual_sample_plan_name="virtual_sample_plan.npy",
+    ),
+)
+
+_CONFIGS.append(
+    TrainConfig(
+        name="pi05_origami_comp_action_chunk_phase3_build",
+        model=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MODEL,
+        data=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_BUILD_DATA,
+        # This is a build-only config. Keeping the Phase-2 checkpoint reference
+        # visible documents the intended Phase-3 initialization without making
+        # the raw-data shard builder load model parameters.
+        weight_loader=weight_loaders.CheckpointWeightLoader(_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_CHECKPOINT_PARAMS),
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=700,
+            peak_lr=3e-5,
+            decay_steps=350_000,
+            decay_lr=1e-6,
+        ),
+        freeze_filter=nnx_utils.PathRegex(
+            ".*(origami_ftp_tactile_prefix_encoder/backbone|origami_planner_adapter)/.*"
+        ),
+        param_lr_multipliers=(
+            ParamLrMultiplier(regex=".*origami_planner_adapter.*", multiplier=3.0),
+            ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder.*", multiplier=1.5),
+            ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
+        ),
+        batch_size=32,
+        num_workers=8,
+        num_train_steps=350_000,
+        run_val=False,
+        val_repo_id=None,
+        checkpoint_strategy="manual",
+        save_steps=(),
+        max_to_keep=0,
+        wandb_enabled=False,
+    )
+)
+
+_CONFIGS.append(
+    dataclasses.replace(
+        _CONFIGS[-1],
+        name="pi05_origami_comp_action_chunk_phase3",
+        data=dataclasses.replace(
+            _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_BUILD_DATA,
+            # This config is deliberately shard-only. Its dataset_root and
+            # manifest_root remain provenance/build settings but are not read
+            # by the future Phase-3 shard backend during training.
+            dataset_backend="shard",
+            shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT,
+        ),
+        # 350k is the default for 4.0 logical dataset-equivalents at global
+        # batch size 32. Remote runs must set both batch_size and train steps
+        # from the realized virtual-plan count when using another batch size.
+        batch_size=32,
+        num_workers=8,
+        num_train_steps=350_000,
+        run_val=False,
+        val_repo_id=None,
+        save_steps=(25_000, 50_000, 100_000, 175_000, 250_000, 350_000),
+        max_to_keep=10,
+        wandb_enabled=True,
     )
 )
 
