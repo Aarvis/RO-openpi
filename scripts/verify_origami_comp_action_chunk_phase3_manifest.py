@@ -34,15 +34,29 @@ def main() -> int:
     required_offset = (build.mixed_speed.action_horizon - 1) * common_stride
     train = pd.read_parquet(root / data.manifest_build.train_index_name)
     val = pd.read_parquet(root / data.manifest_build.val_index_name)
-    train_uids = set(train["episode_uid"].astype(str))
-    val_uids = set(val["episode_uid"].astype(str))
+    def _episode_uids(frame: pd.DataFrame) -> set[str]:
+        return set() if "episode_uid" not in frame else set(frame["episode_uid"].astype(str))
+
+    train_uids = _episode_uids(train)
+    val_uids = _episode_uids(val)
     failures: list[str] = []
     if train_uids & val_uids:
         failures.append(f"train/val episode overlap: {sorted(train_uids & val_uids)[:5]}")
     for split, frame in (("train", train), ("val", val)):
+        # A Phase-3 training-only configuration is allowed to have zero
+        # validation episodes. Pandas may serialize that empty parquet with no
+        # planner column, which is valid because there are no rows to violate
+        # the planner-free contract.
+        if frame.empty:
+            continue
+        required_columns = {"episode_uid", "frame_position", "planner_enabled"}
+        missing_columns = sorted(required_columns - set(frame.columns))
+        if missing_columns:
+            failures.append(f"{split}: missing required columns {missing_columns}")
+            continue
         if frame.duplicated(subset=["episode_uid", "frame_position"]).any():
             failures.append(f"{split}: duplicate episode/frame rows")
-        if "planner_enabled" not in frame or frame["planner_enabled"].astype(bool).any():
+        if frame["planner_enabled"].astype(bool).any():
             failures.append(f"{split}: planner_enabled must be false for every row")
         if "sample_weight" in frame and not np.allclose(frame["sample_weight"].to_numpy(dtype=np.float32), 1.0):
             failures.append(f"{split}: Phase-3 sample_weight must be exactly one")
