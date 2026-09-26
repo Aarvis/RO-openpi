@@ -19,6 +19,7 @@ if str(SRC_DIR) not in sys.path:
 
 import openpi.training.origami_comp_action_chunk_phase3_dataset as _phase3_dataset
 import openpi.training.origami_comp_action_chunk_phase3_shards as _phase3
+import openpi.training.origami_comp_action_chunk_shards as _chunk
 
 
 def _args() -> argparse.Namespace:
@@ -74,9 +75,10 @@ def main() -> int:
         physical_raw_available += int(np.count_nonzero(raw_available))
         physical_raw_missing += int(len(raw_available) - np.count_nonzero(raw_available))
         for image_key in settings.image_modalities:
-            image = np.load(arrays_dir / f"image_{image_key}.npy", mmap_mode="r")
+            array_name = f"{_chunk.IMAGE_ARRAY_PREFIX}{image_key}"
+            image = np.load(arrays_dir / f"{array_name}.npy", mmap_mode="r")
             if image.shape != (spec.num_rows, 224, 224, 3) or image.dtype != np.uint8:
-                failures.append(f"{spec.shard_name}: image_{image_key} is not OpenPI 224x224 uint8 input")
+                failures.append(f"{spec.shard_name}: {array_name} is not OpenPI 224x224 uint8 input")
         for start in range(0, len(plan), chunk_rows):
             block = np.asarray(plan[start : start + chunk_rows])
             for physical, stride, occurrence in block.tolist():
