@@ -122,6 +122,8 @@ def main() -> int:
             failures.append(f"logical sample {index}: selected action target differs from stride array")
         if not np.all(item["action_mask"]):
             failures.append(f"logical sample {index}: action mask is not all true")
+        if item["action_mask"].shape != (settings.action_horizon, settings.action_dim):
+            failures.append(f"logical sample {index}: incorrect action-mask shape")
         expected_prompt = settings.phase3_prompt_template.format(speed=speed)
         if str(item["prompt"]) != expected_prompt:
             failures.append(f"logical sample {index}: prompt/speed mismatch")

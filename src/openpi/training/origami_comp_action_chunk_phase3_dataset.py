@@ -160,7 +160,13 @@ class OrigamiCompActionChunkPhase3Dataset:
             "state_mask": np.ones((self._settings.state_dim,), dtype=bool),
             # Downstream DeltaActions mutates targets, so copy the read-only memmap slice.
             "actions": np.array(arrays[f"actions_stride_{stride}"][physical_row], dtype=np.float32, copy=True),
-            "action_mask": np.ones((self._settings.action_horizon,), dtype=bool),
+            # The model contract is [action_horizon, action_dim].  Supplying
+            # only [action_horizon] makes PadStatesAndActions interpret the
+            # horizon as the feature axis and pad it to model_action_dim.
+            # Phase-3 targets are full 65D targets at every horizon step.
+            "action_mask": np.ones(
+                (self._settings.action_horizon, self._settings.action_dim), dtype=bool
+            ),
             "sample_weight": np.asarray(1.0, dtype=np.float32),
             "prompt": np.asarray(self._settings.phase3_prompt_template.format(speed=stride)),
             "frame_position": np.asarray(frame_position, dtype=np.int64),
