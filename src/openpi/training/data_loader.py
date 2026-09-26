@@ -1,5 +1,6 @@
 from collections.abc import Iterator, Sequence
 import dataclasses
+import inspect
 import logging
 import multiprocessing
 import os
@@ -365,6 +366,7 @@ def create_data_loader(
         num_batches=num_batches,
         num_workers=config.num_workers,
         prefetch_factor=config.data_loader_prefetch_factor,
+        in_order=config.data_loader_in_order,
         seed=config.seed,
         skip_norm_stats=skip_norm_stats,
         framework=framework,
@@ -470,6 +472,7 @@ def create_validation_data_loader(
             num_batches=num_batches,
             num_workers=config.num_workers,
             prefetch_factor=config.data_loader_prefetch_factor,
+            in_order=config.data_loader_in_order,
             seed=config.seed,
             framework=framework,
         ),
@@ -488,6 +491,7 @@ def create_torch_data_loader(
     num_batches: int | None = None,
     num_workers: int = 0,
     prefetch_factor: int = 2,
+    in_order: bool = True,
     seed: int = 0,
     framework: str = "jax",
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
@@ -508,6 +512,8 @@ def create_torch_data_loader(
             execute in the main process.
         prefetch_factor: Number of complete batches each worker prepares ahead. Ignored when
             num_workers is zero.
+        in_order: Whether to yield worker results in sampler order. Setting this false permits
+            ready batches to bypass a slower worker.
         seed: The seed to use for shuffling the data.
     """
     shard_streaming = (
@@ -568,6 +574,7 @@ def create_torch_data_loader(
         num_batches=num_batches,
         num_workers=num_workers,
         prefetch_factor=prefetch_factor,
+        in_order=in_order,
         seed=seed,
         framework=framework,
     )
@@ -630,6 +637,7 @@ class TorchDataLoader:
         num_batches: int | None = None,
         num_workers: int = 0,
         prefetch_factor: int = 2,
+        in_order: bool = True,
         seed: int = 0,
         framework: str = "jax",
     ):
@@ -648,6 +656,8 @@ class TorchDataLoader:
                 execute in the main process.
             prefetch_factor: Number of complete batches each worker prepares ahead. Ignored
                 when num_workers is zero.
+            in_order: Whether to yield worker results in sampler order. Setting this false
+                prevents a slow worker from blocking later ready batches.
             seed: The seed to use for shuffling the data.
         """
         if jax.process_count() > 1:
@@ -674,26 +684,37 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        supports_in_order = "in_order" in inspect.signature(torch.utils.data.DataLoader).parameters
+        if not in_order and not supports_in_order:
+            raise RuntimeError(
+                "data_loader_in_order=False requires a PyTorch version whose DataLoader supports the in_order argument."
+            )
         if num_workers > 0:
             logging.info(
-                "DataLoader workers=%d, prefetch_factor=%d, max prefetched batches=%d",
+                "DataLoader workers=%d, prefetch_factor=%d, max prefetched batches=%d, in_order=%s",
                 num_workers,
                 prefetch_factor,
                 num_workers * prefetch_factor,
+                in_order,
             )
+        data_loader_kwargs: dict[str, typing.Any] = {
+            "batch_size": local_batch_size,
+            "shuffle": sampler is None and shuffle,
+            "sampler": sampler,
+            "num_workers": num_workers,
+            "multiprocessing_context": mp_context,
+            "persistent_workers": num_workers > 0,
+            "prefetch_factor": prefetch_factor if num_workers > 0 else None,
+            "collate_fn": _collate_fn,
+            "worker_init_fn": _worker_init_fn,
+            "drop_last": True,
+            "generator": generator,
+        }
+        if supports_in_order:
+            data_loader_kwargs["in_order"] = in_order
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
-            batch_size=local_batch_size,
-            shuffle=(sampler is None and shuffle),  # Don't shuffle if using sampler
-            sampler=sampler,
-            num_workers=num_workers,
-            multiprocessing_context=mp_context,
-            persistent_workers=num_workers > 0,
-            prefetch_factor=prefetch_factor if num_workers > 0 else None,
-            collate_fn=_collate_fn,
-            worker_init_fn=_worker_init_fn,
-            drop_last=True,
-            generator=generator,
+            **data_loader_kwargs,
         )
 
     @property

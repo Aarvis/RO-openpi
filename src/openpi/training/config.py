@@ -1486,6 +1486,9 @@ class TrainConfig:
     # Number of complete batches each worker prepares ahead of the training loop.
     # This only applies when num_workers is greater than zero.
     data_loader_prefetch_factor: int = 2
+    # Preserve sampler order when yielding worker results. Disabling this avoids
+    # head-of-line blocking when one worker is slower than its peers.
+    data_loader_in_order: bool = True
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
@@ -3278,6 +3281,7 @@ _CONFIGS.append(
         batch_size=32,
         num_workers=8,
         data_loader_prefetch_factor=4,
+        data_loader_in_order=False,
         num_train_steps=350_000,
         run_val=False,
         val_repo_id=None,
