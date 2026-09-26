@@ -364,6 +364,7 @@ def create_data_loader(
         shuffle=shuffle,
         num_batches=num_batches,
         num_workers=config.num_workers,
+        prefetch_factor=config.data_loader_prefetch_factor,
         seed=config.seed,
         skip_norm_stats=skip_norm_stats,
         framework=framework,
@@ -468,6 +469,7 @@ def create_validation_data_loader(
             sampler=sampler,
             num_batches=num_batches,
             num_workers=config.num_workers,
+            prefetch_factor=config.data_loader_prefetch_factor,
             seed=config.seed,
             framework=framework,
         ),
@@ -485,6 +487,7 @@ def create_torch_data_loader(
     shuffle: bool = False,
     num_batches: int | None = None,
     num_workers: int = 0,
+    prefetch_factor: int = 2,
     seed: int = 0,
     framework: str = "jax",
 ) -> DataLoader[tuple[_model.Observation, _model.Actions]]:
@@ -503,6 +506,8 @@ def create_torch_data_loader(
             If not provided, will iterate over the dataset indefinitely.
         num_workers: The number of worker processes to use. If zero, the data loader will
             execute in the main process.
+        prefetch_factor: Number of complete batches each worker prepares ahead. Ignored when
+            num_workers is zero.
         seed: The seed to use for shuffling the data.
     """
     shard_streaming = (
@@ -562,6 +567,7 @@ def create_torch_data_loader(
         sampler=sampler,
         num_batches=num_batches,
         num_workers=num_workers,
+        prefetch_factor=prefetch_factor,
         seed=seed,
         framework=framework,
     )
@@ -623,6 +629,7 @@ class TorchDataLoader:
         sampler: torch.utils.data.Sampler | None = None,
         num_batches: int | None = None,
         num_workers: int = 0,
+        prefetch_factor: int = 2,
         seed: int = 0,
         framework: str = "jax",
     ):
@@ -639,6 +646,8 @@ class TorchDataLoader:
                 indefinitely.
             num_workers: The number of worker processes to use. If zero, the data loader will
                 execute in the main process.
+            prefetch_factor: Number of complete batches each worker prepares ahead. Ignored
+                when num_workers is zero.
             seed: The seed to use for shuffling the data.
         """
         if jax.process_count() > 1:
@@ -646,6 +655,8 @@ class TorchDataLoader:
 
         if len(dataset) < local_batch_size:
             raise ValueError(f"Local batch size ({local_batch_size}) is larger than the dataset size ({len(dataset)}).")
+        if prefetch_factor <= 0:
+            raise ValueError("prefetch_factor must be greater than zero.")
 
         # Store sharding - None for PyTorch, JAX sharding for JAX
         self._sharding = sharding
@@ -663,6 +674,13 @@ class TorchDataLoader:
 
         generator = torch.Generator()
         generator.manual_seed(seed)
+        if num_workers > 0:
+            logging.info(
+                "DataLoader workers=%d, prefetch_factor=%d, max prefetched batches=%d",
+                num_workers,
+                prefetch_factor,
+                num_workers * prefetch_factor,
+            )
         self._data_loader = torch.utils.data.DataLoader(
             typing.cast(torch.utils.data.Dataset, dataset),
             batch_size=local_batch_size,
@@ -671,6 +689,7 @@ class TorchDataLoader:
             num_workers=num_workers,
             multiprocessing_context=mp_context,
             persistent_workers=num_workers > 0,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
             collate_fn=_collate_fn,
             worker_init_fn=_worker_init_fn,
             drop_last=True,

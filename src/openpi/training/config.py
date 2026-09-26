@@ -1483,6 +1483,9 @@ class TrainConfig:
     # Number of workers to use for the data loader. Increasing this number will speed up data loading but
     # will increase memory and CPU usage.
     num_workers: int = 2
+    # Number of complete batches each worker prepares ahead of the training loop.
+    # This only applies when num_workers is greater than zero.
+    data_loader_prefetch_factor: int = 2
     # Number of train steps (batches) to run.
     num_train_steps: int = 30_000
 
@@ -1597,6 +1600,8 @@ class TrainConfig:
             raise ValueError("--val_frequency must be greater than 0.")
         if self.val_batch_size is not None and self.val_batch_size <= 0:
             raise ValueError("--val_batch_size must be greater than 0 when set.")
+        if self.data_loader_prefetch_factor <= 0:
+            raise ValueError("--data_loader_prefetch_factor must be greater than 0.")
 
 
 # Use `get_config` if you need to get a config by name in your code.
@@ -3272,6 +3277,7 @@ _CONFIGS.append(
         # from the realized virtual-plan count when using another batch size.
         batch_size=32,
         num_workers=8,
+        data_loader_prefetch_factor=4,
         num_train_steps=350_000,
         run_val=False,
         val_repo_id=None,
