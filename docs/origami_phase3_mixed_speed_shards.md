@@ -39,24 +39,28 @@ The default configuration is:
 
 | Speed | Action stride | Episode-equivalent coverage |
 | --- | ---: | ---: |
-| 1x | 1 | 1.50 |
-| 2x | 2 | 1.00 |
-| 3x | 3 | 0.75 |
-| 4x | 4 | 0.50 |
-| 5x | 5 | 0.25 |
+| 1x | 1 | 1.25 |
+| 2x | 2 | 0.50 |
+| 3x | 3 | 0.25 |
 
 These values are configuration inputs, not hard-coded shard-builder behavior.
-Changing a stride or coverage requires rebuilding the Phase 3 source manifest
-and shards; it does not require copying image or tactile data once per speed.
+After a completed physical shard build, changing only this speed mixture
+requires replanning virtual sample plans; it does not require rebuilding the
+source manifest or reprocessing videos, images, tactile inputs, state, or
+action arrays.
 
-For an action horizon of 25 and maximum stride 5, retained starts obey:
+For a fresh physical build with action horizon 25 and the current maximum
+configured stride 3, retained starts obey:
 
 ```text
-frame_position + 24 * 5 < episode_length
+frame_position + 24 * 3 < episode_length
 ```
 
-Consequently every retained row has a full horizon for every configured speed.
-Phase 3 stores no action-mask arrays.
+The already completed shard package being replanned was built with the older
+maximum stride 5 contract, so it conservatively omits the last 120 source
+frames of every episode. Replanning does not change physical rows or restore
+those frames. Every retained row still has a full horizon for all current
+configured speeds, so Phase 3 stores no action-mask arrays.
 
 Action targets in shards remain raw absolute actions. The training transform
 later creates state-anchored deltas and applies Phase 3 normalization.
@@ -86,10 +90,14 @@ val/shard_*/...                 # when validation shards are built
 ```
 
 The Phase 3 shard schema keeps one physical copy of observations and tactile
-inputs, including the original raw tactile image when it exists, five action
-arrays (`actions_stride_1.npy` through `actions_stride_5.npy`), and a compact
-shard-local virtual sample plan containing
+inputs, including the original raw tactile image when it exists, stride action
+arrays, and a compact shard-local virtual sample plan containing
 `(physical_row_id, speed_id, occurrence_id)` references.
+
+The already-built package contains `actions_stride_1.npy` through
+`actions_stride_5.npy`; the current virtual plans reference only strides 1, 2,
+and 3. The unused stride-4/5 arrays remain physically present but are not read
+as action targets during training.
 
 Raw tactile dropout is deliberately not baked into physical shards. The loader
 retains deform tactile and decides whether raw tactile is available
@@ -125,6 +133,7 @@ The Phase 3 build path is now separated from existing Phase 1/2 shard scripts:
 scripts/build_origami_comp_action_chunk_manifest.py
 scripts/verify_origami_comp_action_chunk_phase3_manifest.py
 scripts/build_origami_comp_action_chunk_phase3_shards.py
+scripts/replan_origami_comp_action_chunk_phase3_shards.py
 scripts/verify_origami_comp_action_chunk_phase3_shards.py
 scripts/verify_origami_comp_action_chunk_phase3_source_reconstruction.py
 scripts/compute_origami_comp_action_chunk_phase3_norm_stats.py
@@ -136,7 +145,7 @@ scripts/report_origami_comp_action_chunk_phase3_training_plan.py
 The generic manifest builder gained two Phase-3-safe controls:
 
 ```text
---common-horizon-max-stride 5
+--common-horizon-max-stride 3
 --force-planner-disabled
 ```
 
@@ -160,8 +169,8 @@ python .\scripts\verify_origami_comp_action_chunk_phase3_manifest.py `
   --config-name pi05_origami_comp_action_chunk_phase3_build
 ```
 
-Expected result: every retained row has a complete 25-step horizon through
-stride 5, every `planner_enabled` value is false, every sample weight is one,
+Expected result: every retained row has a complete 25-step horizon through the
+maximum configured stride, every `planner_enabled` value is false, every sample weight is one,
 and no episode appears in both splits.
 
 ### 2. Inspect shard allocation without decoding videos
@@ -211,6 +220,35 @@ floating arrays for NaN/Inf and requires every virtual plan to exactly match its
 deterministic episode-balanced reconstruction. Neither mode needs raw source
 data.
 
+### Replan an existing completed shard package
+
+When changing only `stride_episode_coverage` in the Phase-3 config, do not run
+the physical shard builder again. The following command regenerates only every
+shard's compact `arrays/virtual_sample_plan.npy` and related metadata. It does
+not read raw videos or rewrite any physical arrays. Do not train or run
+verification while a replan is in progress; if interrupted, rerun the same
+command until it completes.
+
+```bash
+uv run python scripts/replan_origami_comp_action_chunk_phase3_shards.py \
+  --config-name pi05_origami_comp_action_chunk_phase3_build \
+  --split train \
+  --num-workers 24
+```
+
+Inspect the selected package and configured coverage before writing:
+
+```bash
+uv run python scripts/replan_origami_comp_action_chunk_phase3_shards.py \
+  --config-name pi05_origami_comp_action_chunk_phase3_build \
+  --split train \
+  --plan-only
+```
+
+After it reports `OK`, run the full shard verification, loader verification,
+normalization recomputation with `--overwrite`, and normalization provenance
+verification in the order documented below.
+
 ### 5. Run source reconstruction verification
 
 On the remote build machine, compare a random sample against raw source arrays:
@@ -223,7 +261,7 @@ python .\scripts\verify_origami_comp_action_chunk_phase3_source_reconstruction.p
   --include-images
 ```
 
-This verifies state, tactile vectors, all five action strides, and—when
+This verifies state, tactile vectors, every currently configured action stride, and—when
 `--include-images` is supplied—the decoded/resized camera and tactile images,
 including tactile-raw availability. Run it again
 with `--split val` when validation shards are present. Increase `--num-samples`
@@ -297,7 +335,7 @@ following have passed on the remote machine:
 4. Source reconstruction verification exits zero for both available splits.
 5. Loader verification exits zero at the intended remote global batch size.
 6. Norm-stat computation and provenance verification both exit zero.
-7. The top-level `shard_manifest.json` records the intended `1.5/1/0.75/0.5/0.25`
+7. The top-level `shard_manifest.json` records the intended `1.25/0.5/0.25`
    episode-coverage mapping and the Phase 3 format version.
 
 At that point copy the completed shard root, Phase 3 normalization assets once

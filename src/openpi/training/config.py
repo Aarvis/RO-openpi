@@ -3144,7 +3144,11 @@ _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_CHECKPOINT_PARAMS = (
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MIXED_SPEED = OrigamiMixedSpeedShardConfig(
     action_horizon=25,
-    stride_episode_coverage={1: 1.50, 2: 1.00, 3: 0.75, 4: 0.50, 5: 0.25},
+    # Phase-3 logical sampling is episode-balanced. This is 1.25 retained
+    # episode-equivalents at 1x, 0.50 at 2x, and 0.25 at 3x. The physical
+    # shard package still retains stride-4/5 arrays built previously, but the
+    # virtual plan and training loader intentionally never reference them.
+    stride_episode_coverage={1: 1.25, 2: 0.50, 3: 0.25},
     episode_sampling_mode="episode_balanced",
     seed=1234,
     prompt_template="Fold paper into airplane. Speed: {speed}x.",
@@ -3275,9 +3279,8 @@ _CONFIGS.append(
             phase3_virtual_plan_filename="virtual_sample_plan.npy",
             phase3_prompt_template="Fold paper into airplane. Speed: {speed}x.",
         ),
-        # 350k is the default for 4.0 logical dataset-equivalents at global
-        # batch size 32. Remote runs must set both batch_size and train steps
-        # from the realized virtual-plan count when using another batch size.
+        # Remote runs must set both batch_size and train steps from the
+        # realized virtual-plan count after the final virtual plan is written.
         batch_size=32,
         num_workers=8,
         data_loader_prefetch_factor=4,
