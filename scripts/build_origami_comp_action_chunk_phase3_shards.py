@@ -504,8 +504,7 @@ def main() -> int:
         target_bytes = _chunk.parse_size_bytes(build.target_shard_bytes)
         assert target_bytes is not None
         plan = _plan_shards(infos, target_bytes=target_bytes, max_episodes=build.max_episodes_per_shard, seed=build.seed)
-        split_tasks = _source_rows_files(shard_root, split, rows, plan)
-        for task in split_tasks:
+        for task in plan:
             manifest_entries.append(
                 {
                     "split": split, "shard_id": task["shard_id"], "shard_name": task["shard_name"],
@@ -513,6 +512,12 @@ def main() -> int:
                     "episodes": list(task["episodes"]), "seasons": list(task["seasons"]), "complete": False,
                 }
             )
+        # A plan inspection must be read-only: do not create temporary source
+        # row copies or replace a manifest that describes completed shards.
+        if args.plan_only:
+            continue
+        split_tasks = _source_rows_files(shard_root, split, rows, plan)
+        for task in split_tasks:
             if task["shard_id"] >= args.start_shard and (args.max_shards is None or len(tasks) < args.max_shards):
                 tasks.append(
                     {
@@ -525,6 +530,10 @@ def main() -> int:
                         "progress_update_frames": int(build.progress_update_frames),
                     }
                 )
+    if args.plan_only:
+        print(f"Phase-3 read-only plan: {len(manifest_entries)} shards, split={build.split}")
+        return 0
+    print(f"Phase-3 plan: {len(manifest_entries)} shards, {len(tasks)} selected, split={build.split}")
     root_metadata = {
         "format": _phase3.FORMAT_VERSION,
         "config_name": args.config_name,
@@ -534,10 +543,6 @@ def main() -> int:
     }
     shard_root.mkdir(parents=True, exist_ok=True)
     _phase3.atomic_write_json(shard_root / _phase3.SHARD_MANIFEST_FILENAME, root_metadata)
-    print(f"Phase-3 plan: {len(manifest_entries)} shards, {len(tasks)} selected, split={build.split}")
-    if args.plan_only:
-        _remove_temporary_source_rows(shard_root)
-        return 0
     workers = min(max(1, int(build.num_workers)), max(1, len(tasks)))
     context = multiprocessing.get_context("spawn")
     failures: list[dict[str, Any]] = []

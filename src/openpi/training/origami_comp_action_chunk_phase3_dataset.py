@@ -34,8 +34,9 @@ class OrigamiCompActionChunkPhase3Dataset:
     Concatenating per-shard plans produces one continuous logical stream. The
     standard Torch loader consequently makes a full boundary batch from the
     tail of one shard and head of the next shard, dropping only the final
-    global remainder. With the default two-shard cache, the following shard is
-    memory-mapped when a worker first enters the current one.
+    global remainder. Individual samples reference read-only mmap arrays until
+    the worker's NumPy collate_fn stacks that complete batch, so both sides of
+    a boundary must remain open during the transition.
     """
 
     def __init__(self, settings: _dataset.OrigamiVlaSettings, *, split: str):
@@ -70,6 +71,12 @@ class OrigamiCompActionChunkPhase3Dataset:
         if total <= 0:
             raise RuntimeError(f"No logical Phase-3 samples found for split {split!r} in {self._root}.")
         self._cache: OrderedDict[int, _Bundle] = OrderedDict()
+        # A global batch can contain tail rows from shard N and head rows from
+        # shard N+1. Closing N while assembling that batch leaves NumPy views
+        # backed by an invalid mmap and can terminate a DataLoader worker with
+        # SIGSEGV. Retaining previous+current is therefore a correctness floor,
+        # even if a caller configures a one-shard cache.
+        self._cache_limit = max(2, int(settings.shard_max_cached_shards))
 
     def __len__(self) -> int:
         return self._cumulative_counts[-1]
@@ -114,7 +121,7 @@ class OrigamiCompActionChunkPhase3Dataset:
             arrays,
         )
         self._cache[shard_index] = bundle
-        while len(self._cache) > int(self._settings.shard_max_cached_shards):
+        while len(self._cache) > self._cache_limit:
             _old_index, old = self._cache.popitem(last=False)
             for array in (*old.arrays.values(), old.plan):
                 _close(array)
@@ -129,11 +136,10 @@ class OrigamiCompActionChunkPhase3Dataset:
         shard_index = bisect_right(self._cumulative_counts, index)
         previous = 0 if shard_index == 0 else self._cumulative_counts[shard_index - 1]
         bundle = self._load_bundle(shard_index)
-        # Keep the immediate successor open when cache capacity permits. This
-        # is deliberately shard-local: it does not alter ordering or perform
-        # cross-shard sampling, it only avoids a boundary-time mmap/open.
-        if int(self._settings.shard_max_cached_shards) >= 2 and shard_index + 1 < len(self._shards):
-            self._load_bundle(shard_index + 1)
+        # Do not pre-open the successor. With LRU eviction that can discard the
+        # previous shard during a mixed boundary batch. Normal sequential use
+        # now retains previous+current, matching the stable action-chunk shard
+        # loader, without speculative third-shard mappings.
         return bundle, index - previous
 
     def __getitem__(self, index: int) -> dict[str, Any]:
