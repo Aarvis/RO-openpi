@@ -557,7 +557,7 @@ class OrigamiMixedSpeedShardConfig:
 
     action_horizon: int = 25
     stride_episode_coverage: dict[int, float] = dataclasses.field(
-        default_factory=lambda: {1: 1.50, 2: 1.00, 3: 0.75, 4: 0.50, 5: 0.25}
+        default_factory=lambda: {1: 1.00, 2: 0.25, 3: 0.00, 4: 0.00, 5: 0.00}
     )
     episode_sampling_mode: Literal["episode_balanced"] = "episode_balanced"
     seed: int = 1234
@@ -2786,9 +2786,9 @@ _CONFIGS = [
         data=OrigamiCompActionChunkDataConfig(
             repo_id="local/origami_comp_action_chunk",
             assets=AssetsConfig(asset_id="competition_paper_reprocessed_origami_comp_action_chunk"),
-            dataset_root="E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset",
+            dataset_root="/home/jl_fs/RO-competition-paper-dataset",
             manifest_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/home/jl_fs/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             prompt="fold paper into airplane",
@@ -2797,7 +2797,7 @@ _CONFIGS = [
             tactile_filename="tactile_60d.npy",
             dataset_backend="video",
             shard_root=(
-                "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                "/home/jl_fs/RO-competition-paper-dataset/"
                 "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
             ),
             shard_manifest_name="shard_manifest.json",
@@ -2839,7 +2839,7 @@ _CONFIGS = [
                 frame_stride=1,
                 keep_horizon_clipped=False,
                 planner_export_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/home/jl_fs/RO-competition-paper-dataset/"
                     "metadata/checkpoint_planner_vla_rollout_exports/"
                     "no_hmm_224_headleft_tactile_distill_prior__gamma10_future15_thr065_recomputed"
                 ),
@@ -2871,8 +2871,8 @@ _CONFIGS = [
                 speed_final_unpaired_policy="keep",
                 speed_done_policy="neutral",
                 speed_alpha=2.2,
-                speed_min_weight=0.7,
-                speed_max_weight=1.3,
+                speed_min_weight=1.0,
+                speed_max_weight=1.0,
                 speed_epsilon_frames=1.0e-6,
                 speed_weight_val=False,
                 train_index_name="train_index.parquet",
@@ -2880,7 +2880,7 @@ _CONFIGS = [
             ),
             shard_build=OrigamiCompActionChunkShardBuildConfig(
                 shard_root=(
-                    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                    "/home/jl_fs/RO-competition-paper-dataset/"
                     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner"
                 ),
                 split="train",
@@ -2922,7 +2922,7 @@ _CONFIGS = [
                 ),
                 weight_loaders.NpzSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "/home/jl_fs/RO-competition-paper-dataset/"
                         "metadata/openpi_adapter_pretraining/no_hmm_224_headleft_tactile_distill/"
                         "openpi_origami_planner_adapter_prefixed_params.npz"
                     ),
@@ -2930,7 +2930,7 @@ _CONFIGS = [
                 ),
                 weight_loaders.OrbaxSubsetWeightLoader(
                     (
-                        "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+                        "/home/jl_fs/RO-competition-paper-dataset/"
                         "metadata/ftp_tactile_prefix_encoder_runs/sharpawave_40x2048_jax/params"
                     ),
                     key_prefix="origami_ftp_tactile_prefix_encoder",
@@ -3025,15 +3025,15 @@ _ORIGAMI_COMP_ACTION_CHUNK_CONFIG = next(
 )
 
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE2_MANIFEST_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/jl_fs/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_chunk/no_hmm_224_headleft_tactile_prompt_planner_phase2_f25_f30_raw"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE2_SHARD_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/jl_fs/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_chunk_shards/no_hmm_224_headleft_tactile_prompt_planner_phase2_f25_f30_raw"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE2_EXPORT_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/jl_fs/RO-competition-paper-dataset/"
     "metadata/checkpoint_planner_vla_rollout_exports/"
     "no_hmm_224_headleft_tactile_distill_unseen_F25_F30_F50"
 )
@@ -3067,7 +3067,7 @@ _CONFIGS.append(
                 # Target over every dataset episode. Coverage-forced partial
                 # episodes count toward this total; the builder samples only
                 # the remaining disabled quota from complete episodes.
-                planner_dropout_episode_prob=0.50,
+                planner_dropout_episode_prob=1.00,
                 # Planner-present is all-or-nothing per episode.  Before
                 # assignment, require complete exports for every Phase-2 view
                 # mode at every valid H25/S1 action start.  Partial episodes
@@ -3129,18 +3129,15 @@ _CONFIGS.append(
 )
 
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MANIFEST_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/jl_fs/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_chunk/"
     "no_hmm_224_headleft_tactile_mixed_speed_phase3"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
-    "metadata/openpi_origami_comp_action_chunk_phase3_shards/"
-    "no_hmm_224_headleft_tactile_mixed_speed_h25_s1_s5"
+    "/home/jl_fs/RO-competition-paper-dataset/metadata/openpi_origami_comp_action_chunk_phase3_shards/no_hmm_224_headleft_tactile_mixed_speed_h25_s1_s5"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_CHECKPOINT_PARAMS = (
-    "E:/Robot-Origami-Challenge/openpi/checkpoints/pi05_origami_comp_action_chunk_phase2/"
-    "REPLACE_WITH_PHASE2_EXPERIMENT/REPLACE_WITH_PHASE2_STEP/params"
+    "/home/jl_fs/RO-openpi/phase2_weights/params"
 )
 _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MIXED_SPEED = OrigamiMixedSpeedShardConfig(
     action_horizon=25,
@@ -3148,7 +3145,7 @@ _ORIGAMI_COMP_ACTION_CHUNK_PHASE3_MIXED_SPEED = OrigamiMixedSpeedShardConfig(
     # episode-equivalents at 1x, 0.50 at 2x, and 0.25 at 3x. The physical
     # shard package still retains stride-4/5 arrays built previously, but the
     # virtual plan and training loader intentionally never reference them.
-    stride_episode_coverage={1: 1.25, 2: 0.50, 3: 0.25},
+    stride_episode_coverage={1: 1.00, 2: 0.25, 3: 0.00, 4: 0.00, 5: 0.00},
     episode_sampling_mode="episode_balanced",
     seed=1234,
     prompt_template="Fold paper into airplane. Speed: {speed}x.",
@@ -3238,9 +3235,9 @@ _CONFIGS.append(
         # the raw-data shard builder load model parameters.
         weight_loader=weight_loaders.CheckpointWeightLoader(_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_CHECKPOINT_PARAMS),
         lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=700,
+            warmup_steps=500,
             peak_lr=3e-5,
-            decay_steps=350_000,
+            decay_steps=44_000,
             decay_lr=1e-6,
         ),
         freeze_filter=nnx_utils.PathRegex(
@@ -3251,15 +3248,15 @@ _CONFIGS.append(
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder.*", multiplier=1.5),
             ParamLrMultiplier(regex=".*origami_ftp_tactile_prefix_encoder/prefix_projection.*", multiplier=3.0),
         ),
-        batch_size=32,
-        num_workers=8,
-        num_train_steps=350_000,
+        batch_size=80,
+        num_workers=16,
+        num_train_steps=44_000,
         run_val=False,
         val_repo_id=None,
         checkpoint_strategy="manual",
-        save_steps=(),
-        max_to_keep=0,
-        wandb_enabled=False,
+        save_steps=(500, 1000, 5000, 10_000, 17_000, 20_000, 30_000, 32_000, 34_000, 40_000),
+        max_to_keep=40,
+        wandb_enabled=True,
     )
 )
 
@@ -3274,32 +3271,35 @@ _CONFIGS.append(
             # read by the later Phase-3 shard backend during training.
             dataset_backend="shard",
             shard_root=_ORIGAMI_COMP_ACTION_CHUNK_PHASE3_SHARD_ROOT,
+            shard_max_cached_shards=1,
             phase3_mixed_speed_enabled=True,
             phase3_shard_format="origami_comp_action_chunk_phase3_mixed_speed_v2",
             phase3_virtual_plan_filename="virtual_sample_plan.npy",
             phase3_prompt_template="Fold paper into airplane. Speed: {speed}x.",
         ),
-        # Remote runs must set both batch_size and train steps from the
-        # realized virtual-plan count after the final virtual plan is written.
-        batch_size=32,
-        num_workers=8,
+        # 350k is the default for 4.0 logical dataset-equivalents at global
+        # batch size 32. Remote runs must set both batch_size and train steps
+        # from the realized virtual-plan count when using another batch size.
+        batch_size=80,
+        num_workers=16,
         data_loader_prefetch_factor=4,
-        data_loader_in_order=False,
-        num_train_steps=350_000,
+        num_train_steps=44_000,
+        data_loader_in_order=True,
+        log_interval=50,
         run_val=False,
         val_repo_id=None,
-        save_steps=(25_000, 50_000, 100_000, 175_000, 250_000, 350_000),
-        max_to_keep=10,
+        save_steps=(500, 1000, 5000, 10_000, 17_000, 20_000, 30_000, 32_000, 34_000, 40_000),
+        max_to_keep=30,
         wandb_enabled=True,
     )
 )
 
 _ORIGAMI_COMP_ACTION_SPLINE_MANIFEST_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/jl_fs/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_spline/no_hmm_224_headleft_tactile_prompt_planner"
 )
 _ORIGAMI_COMP_ACTION_SPLINE_SHARD_ROOT = (
-    "E:/Robot-Origami-Challenge/Competition_Paper_Reprocessed_Dataset/"
+    "/home/jl_fs/RO-competition-paper-dataset/"
     "metadata/openpi_origami_comp_action_spline_shards/no_hmm_224_headleft_tactile_prompt_planner"
 )
 _CONFIGS.append(

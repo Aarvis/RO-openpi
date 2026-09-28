@@ -1,4 +1,5 @@
 # Data directories.
+phase2_weights/
 assets/
 checkpoints/
 data/
